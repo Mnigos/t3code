@@ -115,6 +115,13 @@ const make = Effect.gen(function* () {
   const startedTurns = new Map<ThreadId, TurnId>();
   const pending = new Set<ThreadId>();
 
+  // Worktree paths are compared through this so that two spellings of the same
+  // directory (macOS `/tmp/foo` is a symlink to `/private/tmp/foo`) match. A
+  // path that cannot be resolved — the directory is gone — keeps its raw form,
+  // so resolution failures can only narrow matches back to string equality.
+  const canonicalWorktreePath = (worktreePath: string) =>
+    fileSystem.realPath(worktreePath).pipe(Effect.orElseSucceed(() => worktreePath));
+
   const appendRevertFailureActivity = (input: {
     readonly threadId: ThreadId;
     readonly turnCount: number;
@@ -602,10 +609,12 @@ const make = Effect.gen(function* () {
       }
 
       const shell = yield* projectionSnapshotQuery.getShellSnapshot();
-      const worktreeIsShared = shell.threads.some(
-        (other) => other.id !== thread.id && other.worktreePath === thread.worktreePath,
+      const otherWorktreePaths = shell.threads.flatMap((other) =>
+        other.id !== thread.id && other.worktreePath !== null ? [other.worktreePath] : [],
       );
-      if (worktreeIsShared) {
+      const canonicalWorktree = yield* canonicalWorktreePath(thread.worktreePath);
+      const canonicalOthers = yield* Effect.forEach(otherWorktreePaths, canonicalWorktreePath);
+      if (canonicalOthers.includes(canonicalWorktree)) {
         return;
       }
 
