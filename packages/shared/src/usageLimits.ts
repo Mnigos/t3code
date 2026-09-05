@@ -409,22 +409,30 @@ export function remainingPercent(window: ServerProviderUsageWindow): number {
 }
 
 /**
+ * Intl and `toFixed` stop at 20 fraction digits. No real currency has more
+ * than four, so past this only the displayed precision is capped; the amount
+ * is still scaled by the provider's own exponent.
+ */
+const MAX_SPEND_FRACTION_DIGITS = 20;
+
+/**
  * `$46.31 of $500.00`: a spending budget in the provider's currency and
  * precision. A currency code Intl does not know falls back to `46.31 USD`.
  */
 export function formatSpend(spend: ServerProviderUsageSpend): string {
   const scale = 10 ** spend.exponent;
+  const fractionDigits = Math.min(spend.exponent, MAX_SPEND_FRACTION_DIGITS);
   let format: (minor: number) => string;
   try {
     const currency = new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: spend.currency,
-      minimumFractionDigits: spend.exponent,
-      maximumFractionDigits: spend.exponent,
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
     });
     format = (minor) => currency.format(minor / scale);
   } catch {
-    format = (minor) => `${(minor / scale).toFixed(spend.exponent)} ${spend.currency}`;
+    format = (minor) => `${(minor / scale).toFixed(fractionDigits)} ${spend.currency}`;
   }
   return `${format(spend.usedMinor)} of ${format(spend.limitMinor)}`;
 }
