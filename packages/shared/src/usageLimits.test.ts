@@ -888,6 +888,8 @@ describe("isUsageLimitsCommand", () => {
     expect(isUsageLimitsCommand("/usage-limits explain")).toBe(false);
     expect(isUsageLimitsCommand("Explain /usage-limits")).toBe(false);
     expect(isUsageLimitsCommand("/usage")).toBe(false);
+  });
+});
 
 describe("formatSpend", () => {
   it("renders minor units in the provider's currency and precision", () => {
@@ -903,5 +905,13 @@ describe("formatSpend", () => {
     expect(
       formatSpend({ usedMinor: 4631, limitMinor: 50000, currency: "CREDITS", exponent: 2 }),
     ).toBe("46.31 CREDITS of 500.00 CREDITS");
+  });
+
+  it("caps an absurd exponent instead of throwing on the Limits row", () => {
+    for (const currency of ["USD", "CREDITS"]) {
+      expect(() =>
+        formatSpend({ usedMinor: 1, limitMinor: 2, currency, exponent: 120 }),
+      ).not.toThrow();
+    }
   });
 });
