@@ -177,8 +177,32 @@ export function LimitWindows({
       {windows.map((window) => {
         const pace = paceOf(window, now);
         const resetsIn = formatResetsIn(window, now);
-        // A budget has no reset to count down to; its amounts take that slot.
+        // A budget reports amounts instead of a reset countdown.
         const detail = window.spend ? `${formatSpend(window.spend)} used` : (resetsIn ?? "");
+        if (window.spend) {
+          return (
+            <div
+              key={window.id}
+              className="col-span-3 grid min-w-0 grid-cols-2 items-center gap-x-3 gap-y-0.5"
+            >
+              <span className="col-span-2 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
+                <span className="min-w-0 wrap-anywhere whitespace-normal text-muted-foreground">
+                  {window.label}
+                </span>
+                <span className="ms-auto shrink-0 font-medium text-foreground tabular-nums">
+                  {remainingPercent(window)}% left
+                </span>
+              </span>
+              <WindowBar color={color} window={window} now={now} />
+              <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground tabular-nums">
+                {pace ? <PaceIcon pace={pace} /> : null}
+                <span className="ms-auto min-w-0 text-right wrap-anywhere whitespace-normal">
+                  {detail}
+                </span>
+              </span>
+            </div>
+          );
+        }
         return (
           <Fragment key={window.id}>
             <span className="flex min-w-0 items-center gap-2 text-xs">
