@@ -3422,11 +3422,7 @@ describe("user input answers", () => {
       ],
     });
     const activities = buildThreadFeed(thread).flatMap((item) =>
-      item.type === "activity-group"
-        ? item.activities
-        : item.type === "activity"
-          ? [item.activity]
-          : [],
+      item.type === "activity-group" ? item.activities : [],
     );
     expect(activities.map((activity) => [activity.id, activity.workEntry.detail])).toEqual([
       ["asked", undefined],
