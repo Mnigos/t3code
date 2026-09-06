@@ -615,10 +615,10 @@ export const make = Effect.gen(function* () {
         event.preventDefault();
       }
     });
-    // Ctrl+wheel and trackpad pinch ask for zoom through this event rather
-    // than an accelerator, and Chromium leaves applying it to the app. Only
-    // the main window's own webContents emits it; a preview guest under the
-    // pointer gets its own event and keeps its own zoom.
+    // Ctrl+wheel asks for zoom through this event rather than an accelerator,
+    // and Chromium leaves applying it to the app. Only the main window's own
+    // webContents emits it; a preview guest under the pointer gets its own
+    // event and keeps its own zoom.
     window.webContents.on("zoom-changed", (_event, direction) => {
       if (window.isDestroyed()) return;
       runFork(zoomWindow(window, direction));
