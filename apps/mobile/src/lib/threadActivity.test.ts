@@ -3384,3 +3384,53 @@ it("makes attachment-only question answers expandable in the mobile feed", () =>
   });
   expect(group.activities[0]?.getFullDetail()).toBeNull();
 });
+
+describe("user input answers", () => {
+  it("shows the submitted answers on the resolved row, labelled by their questions", () => {
+    const turnId = TurnId.make("turn-answers");
+    const thread = makeThread({
+      id: ThreadId.make("thread-answers"),
+      projectId: ProjectId.make("project-1"),
+      title: "Answers",
+      activities: [
+        makeActivity({
+          id: EventId.make("asked"),
+          kind: "user-input.requested",
+          summary: "User input requested",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          turnId,
+          payload: {
+            requestId: "req-1",
+            questions: [
+              {
+                id: "approach",
+                header: "Approach",
+                question: "How should we proceed?",
+                options: [],
+              },
+            ],
+          },
+        }),
+        makeActivity({
+          id: EventId.make("answered"),
+          kind: "user-input.resolved",
+          summary: "User input submitted",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          turnId,
+          payload: { requestId: "req-1", answers: { approach: "Ship the minimal fix" } },
+        }),
+      ],
+    });
+    const activities = buildThreadFeed(thread).flatMap((item) =>
+      item.type === "activity-group"
+        ? item.activities
+        : item.type === "activity"
+          ? [item.activity]
+          : [],
+    );
+    expect(activities.map((activity) => [activity.id, activity.workEntry.detail])).toEqual([
+      ["asked", undefined],
+      ["answered", "Approach: Ship the minimal fix"],
+    ]);
+  });
+});

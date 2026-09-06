@@ -15,6 +15,10 @@
       "types": "./src/pendingRequests.ts",
       "default": "./src/pendingRequests.ts"
     },
+    "./user-input-answers": {
+      "types": "./src/userInputAnswers.ts",
+      "default": "./src/userInputAnswers.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"

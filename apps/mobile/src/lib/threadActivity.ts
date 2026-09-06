@@ -34,6 +34,10 @@ import {
 } from "@t3tools/client-runtime/work-log/presentation";
 import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
 import { commandProgramName } from "@t3tools/client-runtime/work-log/command-label";
+import {
+  formatUserInputAnswers,
+  readUserInputQuestions,
+} from "@t3tools/client-runtime/user-input-answers";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -405,6 +409,7 @@ function deriveWorkLogEntries(
 ): DerivedWorkLogEntry[] {
   const ordered = Arr.sort(activities, activityOrder);
   const entries: DerivedWorkLogEntry[] = [];
+  const questionsByRequestId = new Map<string, ReturnType<typeof readUserInputQuestions>>();
   for (const activity of ordered) {
     if (activity.tone !== "error" && isWorktreeSetupActivity(activity.kind)) continue;
     if (activity.kind === "tool.started") continue;
@@ -420,9 +425,33 @@ function deriveWorkLogEntries(
     if (isNoContentRuntimeWarning(activity)) continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    attachUserInputAnswers(activity, entry, questionsByRequestId);
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries);
+}
+
+/**
+ * A resolved user-input row only carries answers keyed by question id; the
+ * question text lives on the request row that preceded it. Pair the two here
+ * so the row can show what was actually answered.
+ */
+function attachUserInputAnswers(
+  activity: OrchestrationThreadActivity,
+  entry: DerivedWorkLogEntry,
+  questionsByRequestId: Map<string, ReturnType<typeof readUserInputQuestions>>,
+): void {
+  const payload = asRecord(activity.payload);
+  const requestId = asTrimmedString(payload?.requestId);
+  if (activity.kind === "user-input.requested") {
+    if (requestId) questionsByRequestId.set(requestId, readUserInputQuestions(payload));
+    return;
+  }
+  if (activity.kind !== "user-input.resolved" || entry.detail) return;
+  const questions = (requestId && questionsByRequestId.get(requestId)) || [];
+  const detail = formatUserInputAnswers(questions, payload?.answers);
+  if (detail) entry.detail = detail;
 }
 
 /** Adapters forward unknown wire-only SDK messages (background_tasks_changed,

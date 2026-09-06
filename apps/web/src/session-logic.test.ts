@@ -450,6 +450,42 @@ describe("workEntryIndicatesToolNeutralStatus", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("shows the submitted answers on the user-input row, labelled by their questions", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "asked",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        sequence: 0,
+        payload: {
+          requestId: "req-1",
+          questions: [
+            { id: "approach", header: "Approach", question: "How should we proceed?", options: [] },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "answered",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        sequence: 1,
+        payload: { requestId: "req-1", answers: { approach: "Ship the minimal fix" } },
+      }),
+      makeActivity({
+        id: "answered-alone",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        sequence: 2,
+        payload: { requestId: "req-unknown", answers: { note: "typed by hand" } },
+      }),
+    ]);
+    expect(entries.map((entry) => [entry.id, entry.detail])).toEqual([
+      ["asked", undefined],
+      ["answered", "Approach: Ship the minimal fix"],
+      ["answered-alone", "note: typed by hand"],
+    ]);
+  });
+
   it("keeps the latest task progress without emitting plan-update log entries", () => {
     const activities = [
       makeActivity({ id: "before", kind: "tool.completed", summary: "Read files", sequence: 0 }),
