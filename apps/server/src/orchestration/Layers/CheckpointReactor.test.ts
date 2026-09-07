@@ -1097,6 +1097,43 @@ describe("CheckpointReactor", () => {
     expect(thread?.branch).toBe("t3code/original-branch");
   });
 
+  it.each([false, true])(
+    "compares the session cwd with a symlinked worktree when shared=%s",
+    async (shared) => {
+      const linkParent = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-checkpoint-link-"));
+      tempDirs.push(linkParent);
+      const worktreePath = NodePath.join(linkParent, "worktree");
+      const pullRequestRefreshCalls: string[] = [];
+      const harness = await createHarness({
+        seedFilesystemCheckpoints: false,
+        threadWorktreePath: worktreePath,
+        threadBranch: "t3code/original-branch",
+        localStatusRefName: "t3code/renamed-by-agent",
+        secondThreadSharingWorktree: shared,
+        pullRequestRefreshCalls,
+      });
+      NodeFS.symlinkSync(harness.cwd, worktreePath, "dir");
+
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.make("evt-turn-completed-symlinked-cwd"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-symlinked-cwd"),
+        payload: { state: "completed" },
+      });
+
+      await harness.drain();
+
+      const snapshot = await harness.readModel();
+      const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.branch).toBe(shared ? "t3code/original-branch" : "t3code/renamed-by-agent");
+      expect(thread?.worktreePath).toBe(worktreePath);
+      expect(pullRequestRefreshCalls).toEqual(shared ? [] : [harness.cwd]);
+    },
+  );
+
   it("does not adopt a temporary placeholder checkout as the thread branch", async () => {
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
