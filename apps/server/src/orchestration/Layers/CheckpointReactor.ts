@@ -602,9 +602,14 @@ const make = Effect.gen(function* () {
         !thread ||
         thread.branch === null ||
         thread.branch === checkedOutBranch ||
-        thread.worktreePath === null ||
-        thread.worktreePath !== input.cwd
+        thread.worktreePath === null
       ) {
+        return;
+      }
+
+      const canonicalWorktree = yield* canonicalWorktreePath(thread.worktreePath);
+      const canonicalCwd = yield* canonicalWorktreePath(input.cwd);
+      if (canonicalWorktree !== canonicalCwd) {
         return;
       }
 
@@ -612,7 +617,6 @@ const make = Effect.gen(function* () {
       const otherWorktreePaths = shell.threads.flatMap((other) =>
         other.id !== thread.id && other.worktreePath !== null ? [other.worktreePath] : [],
       );
-      const canonicalWorktree = yield* canonicalWorktreePath(thread.worktreePath);
       const canonicalOthers = yield* Effect.forEach(otherWorktreePaths, canonicalWorktreePath);
       if (canonicalOthers.includes(canonicalWorktree)) {
         return;
