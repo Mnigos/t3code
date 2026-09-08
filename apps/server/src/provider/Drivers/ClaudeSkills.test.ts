@@ -518,13 +518,17 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
 
       assert.deepEqual(
         skillOverrideSettingsPaths(win32Path, "C:\\Users\\me\\.claude", undefined, "win32", {
+          ProgramFiles: "D:\\Program Files",
           PROGRAMDATA: "C:\\ProgramData",
         }).at(-1),
-        "C:\\ProgramData\\ClaudeCode\\managed-settings.json",
+        "D:\\Program Files\\ClaudeCode\\managed-settings.json",
       );
       assert.deepEqual(
         skillOverrideSettingsPaths(win32Path, "C:\\Users\\me\\.claude", undefined, "win32", {}),
-        ["C:\\Users\\me\\.claude\\settings.json"],
+        [
+          "C:\\Users\\me\\.claude\\settings.json",
+          "C:\\Program Files\\ClaudeCode\\managed-settings.json",
+        ],
       );
 
       // Only the repository root's local file joins in, after the
@@ -573,10 +577,18 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
         "/etc/claude-code/managed-mcp.json",
       );
       assert.equal(
-        claudeManagedMcpConfigPath(win32Path, "win32", { PROGRAMDATA: "C:\\ProgramData" }),
-        "C:\\ProgramData\\ClaudeCode\\managed-mcp.json",
+        claudeManagedMcpConfigPath(win32Path, "win32", {
+          ProgramFiles: " D:\\Program Files ",
+          PROGRAMDATA: "C:\\ProgramData",
+        }),
+        "D:\\Program Files\\ClaudeCode\\managed-mcp.json",
       );
-      assert.equal(claudeManagedMcpConfigPath(win32Path, "win32", {}), undefined);
+      for (const environment of [{}, { ProgramFiles: "   " }, { PROGRAMDATA: "C:\\ProgramData" }]) {
+        assert.equal(
+          claudeManagedMcpConfigPath(win32Path, "win32", environment),
+          "C:\\Program Files\\ClaudeCode\\managed-mcp.json",
+        );
+      }
     }),
   );
 
