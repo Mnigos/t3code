@@ -7,7 +7,7 @@ import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { assert, it } from "@effect/vitest";
 
-import { GitCommandError } from "@t3tools/contracts";
+import { CheckpointRef, GitCommandError } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -102,6 +102,68 @@ it.effect("GitVcsDriver forwards execute env to the VCS process", () => {
               return {
                 exitCode: ChildProcessSpawner.ExitCode(0),
                 stdout: "",
+                stderr: "",
+                stdoutTruncated: false,
+                stderrTruncated: false,
+              };
+            }),
+        }),
+      ),
+    ),
+  );
+});
+
+it.effect("GitVcsDriver flushes checkpoint objects and refs to disk before publishing them", () => {
+  const observedArgs: ReadonlyArray<string>[] = [];
+
+  return Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.makeVcsDriverShape();
+
+    yield* driver.checkpoints.captureCheckpoint({
+      cwd: "/repo",
+      checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread/turn/1"),
+    });
+
+    const writeCommands = ["add", "write-tree", "commit-tree", "update-ref"];
+    const writes = observedArgs.filter((args) =>
+      writeCommands.some((command) => args.includes(command)),
+    );
+    assert.strictEqual(writes.length, 4);
+    for (const args of writes) {
+      const fsync = args.indexOf("core.fsync=objects,reference");
+      assert.strictEqual(args[fsync - 1], "-c", args.join(" "));
+      assert.isBelow(
+        fsync,
+        args.findIndex((arg) => writeCommands.includes(arg)),
+      );
+    }
+    assert.deepStrictEqual(observedArgs.at(-1), [
+      "-C",
+      "/repo",
+      "-c",
+      "core.fsync=objects,reference",
+      "update-ref",
+      "refs/t3/checkpoints/thread/turn/1",
+      "commit0000",
+    ]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(VcsProcess.VcsProcess)({
+          run: (input) =>
+            Effect.sync(() => {
+              observedArgs.push(input.args);
+              const stdout = input.args.includes("write-tree")
+                ? "tree0000\n"
+                : input.args.includes("commit-tree")
+                  ? "commit0000\n"
+                  : input.args.includes("--git-common-dir")
+                    ? ".git\n"
+                    : "";
+              return {
+                exitCode: ChildProcessSpawner.ExitCode(0),
+                stdout,
                 stderr: "",
                 stdoutTruncated: false,
                 stderrTruncated: false,

@@ -711,6 +711,11 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       return path.isAbsolute(gitCommonDir) ? gitCommonDir : path.resolve(cwd, gitCommonDir);
     });
 
+  // Git renames loose objects and refs into place without fsync by default, so
+  // an unclean restart can leave 0-byte files under refs/t3/** that break every
+  // later fetch and push. Checkpoint writes flush before they are published.
+  const durableWrite = ["-c", "core.fsync=objects,reference"] as const;
+
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.captureCheckpoint";
@@ -746,14 +751,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["add", "-A", "--", "."],
+          args: [...durableWrite, "add", "-A", "--", "."],
           env: commitEnv,
         });
 
         const writeTreeResult = yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["write-tree"],
+          args: [...durableWrite, "write-tree"],
           env: commitEnv,
         });
         const treeOid = writeTreeResult.stdout.trim();
@@ -771,7 +776,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         const commitTreeResult = yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["commit-tree", treeOid, "-m", message],
+          args: [...durableWrite, "commit-tree", treeOid, "-m", message],
           env: commitEnv,
         });
         const commitOid = commitTreeResult.stdout.trim();
@@ -788,7 +793,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["update-ref", input.checkpointRef, commitOid],
+          args: [...durableWrite, "update-ref", input.checkpointRef, commitOid],
         });
       }).pipe(Effect.ensuring(cleanupTempIndex));
     }),
