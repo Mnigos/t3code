@@ -3921,6 +3921,83 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect(
+    "hands keyboard focus back to the previous renderer after an automation click",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          let humanInput: ((_event: unknown, signal: unknown) => void) | undefined;
+          const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+            if (method === "Runtime.evaluate") {
+              return { result: { value: { width: 800, height: 600 } } };
+            }
+            if (method === "Input.dispatchMouseEvent" && params?.type === "mousePressed") {
+              humanInput?.({}, { kind: "pointer", x: params.x, y: params.y, button: 0 });
+            }
+            return undefined;
+          });
+          const restoreFocus = vi.fn();
+          getFocusedWebContents.mockReturnValue({
+            id: 7,
+            isDestroyed: () => false,
+            focus: restoreFocus,
+          } as never);
+          fromId.mockReturnValue({
+            id: 42,
+            isDestroyed: () => false,
+            getType: () => "webview",
+            getURL: () => "https://example.com",
+            getTitle: () => "Example",
+            isLoading: () => false,
+            isDevToolsOpened: () => false,
+            getZoomFactor: () => 1,
+            setZoomFactor: vi.fn(),
+            setAudioMuted: vi.fn(),
+            isCurrentlyAudible: () => false,
+            on: vi.fn(),
+            off: vi.fn(),
+            ipc: {
+              on: vi.fn((channel: string, listener: typeof humanInput) => {
+                if (channel === "preview:human-input") humanInput = listener;
+              }),
+              off: vi.fn(),
+            },
+            send: webviewSend,
+            navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+            setIgnoreMenuShortcuts: vi.fn(),
+            setWindowOpenHandler: vi.fn(),
+            debugger: {
+              isAttached: () => false,
+              attach: vi.fn(),
+              sendCommand,
+              on: vi.fn(),
+              off: vi.fn(),
+            },
+          } as never);
+
+          yield* manager.createTab("tab_1");
+          yield* manager.registerWebview("tab_1", 42);
+          const click = yield* manager
+            .automationClick("tab_1", { x: 120, y: 80 })
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* TestClock.adjust(200);
+          yield* Fiber.join(click);
+
+          expect(restoreFocus).toHaveBeenCalledTimes(1);
+          expect(restoreFocus.mock.invocationCallOrder[0]).toBeGreaterThan(
+            sendCommand.mock.invocationCallOrder.at(-1) ?? 0,
+          );
+
+          const offscreen = yield* manager
+            .automationClick("tab_1", { x: 5000, y: 80 })
+            .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }));
+          yield* TestClock.adjust(200);
+          expect((yield* Fiber.join(offscreen))._tag).toBe("Failure");
+          expect(restoreFocus).toHaveBeenCalledTimes(2);
+        }),
+      ),
+  );
+
   effectIt.effect("types in background webviews and enables native key input", () =>
     withManager((manager) =>
       Effect.gen(function* () {
