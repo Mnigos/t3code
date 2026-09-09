@@ -130,18 +130,20 @@ it.effect("GitVcsDriver flushes checkpoint objects and refs to disk before publi
     );
     assert.strictEqual(writes.length, 4);
     for (const args of writes) {
-      const fsync = args.indexOf("core.fsync=objects,reference");
-      assert.strictEqual(args[fsync - 1], "-c", args.join(" "));
-      assert.isBelow(
-        fsync,
-        args.findIndex((arg) => writeCommands.includes(arg)),
-      );
+      const command = args.findIndex((arg) => writeCommands.includes(arg));
+      for (const setting of ["core.fsync=objects,reference", "core.fsyncMethod=fsync"]) {
+        const index = args.indexOf(setting);
+        assert.strictEqual(args[index - 1], "-c", args.join(" "));
+        assert.isBelow(index, command);
+      }
     }
     assert.deepStrictEqual(observedArgs.at(-1), [
       "-C",
       "/repo",
       "-c",
       "core.fsync=objects,reference",
+      "-c",
+      "core.fsyncMethod=fsync",
       "update-ref",
       "refs/t3/checkpoints/thread/turn/1",
       "commit0000",

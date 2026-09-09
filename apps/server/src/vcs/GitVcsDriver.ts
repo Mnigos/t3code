@@ -713,8 +713,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
 
   // Git renames loose objects and refs into place without fsync by default, so
   // an unclean restart can leave 0-byte files under refs/t3/** that break every
-  // later fetch and push. Checkpoint writes flush before they are published.
-  const durableWrite = ["-c", "core.fsync=objects,reference"] as const;
+  // later fetch and push. Checkpoint writes flush before they are published;
+  // macOS defaults to writeout-only, which does not reach the disk either.
+  const durableWrite = [
+    "-c",
+    "core.fsync=objects,reference",
+    "-c",
+    "core.fsyncMethod=fsync",
+  ] as const;
 
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
