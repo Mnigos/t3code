@@ -3731,7 +3731,48 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  // Dispatching input moves keyboard focus into the guest renderer as a side
+  // effect. Hand it back to whatever had it before, so the user's next keystroke
+  // does not land in the previewed page, which may not even be visible.
+  const restoreFocusedWebContents = Effect.fn("PreviewManager.restoreFocusedWebContents")(
+    function* (
+      operation: string,
+      tabId: string,
+      wc: Electron.WebContents,
+      previouslyFocused: Electron.WebContents | null,
+    ) {
+      if (!previouslyFocused || previouslyFocused.id === wc.id || previouslyFocused.isDestroyed()) {
+        return;
+      }
+      yield* attempt({ operation, tabId, webContentsId: previouslyFocused.id }, () =>
+        previouslyFocused.focus(),
+      ).pipe(Effect.ignore);
+    },
+  );
+
   const performAutomationClick = Effect.fn("PreviewManager.performAutomationClick")(function* (
+    tabId: string,
+    wc: Electron.WebContents,
+    input: PreviewAutomationClickInput,
+    send: SendCommand,
+  ) {
+    const previouslyFocused = yield* attempt(
+      { operation: "automationClick.getFocusedWebContents", tabId, webContentsId: wc.id },
+      () => webContents.getFocusedWebContents(),
+    );
+    yield* dispatchAutomationClick(tabId, input, send).pipe(
+      Effect.ensuring(
+        restoreFocusedWebContents(
+          "automationClick.restoreFocusedWebContents",
+          tabId,
+          wc,
+          previouslyFocused,
+        ),
+      ),
+    );
+  });
+
+  const dispatchAutomationClick = Effect.fn("PreviewManager.dispatchAutomationClick")(function* (
     tabId: string,
     input: PreviewAutomationClickInput,
     send: SendCommand,
@@ -3794,7 +3835,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   ) {
     const wc = yield* requireWebContents(tabId);
     yield* withControlSession(tabId, wc, "click", (send) =>
-      performAutomationClick(tabId, input, send),
+      performAutomationClick(tabId, wc, input, send),
     );
   });
 
