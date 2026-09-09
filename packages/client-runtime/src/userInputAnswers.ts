@@ -2,22 +2,16 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
-import { UserInputQuestion } from "@t3tools/contracts";
+import type { UserInputQuestion } from "@t3tools/contracts";
 
-// Older request rows can carry less than the current contract, and question
-// ids are the answer keys, so they are read as plain strings and never trimmed.
+// Older request rows can carry less than the current contract, so each
+// question decodes on its own and a malformed one does not hide the rest.
+// Question ids are the answer keys, so they are read as-is and never trimmed.
+const decodeAskedQuestion = Schema.decodeUnknownOption(
+  Schema.Struct({ id: Schema.String, header: Schema.String, question: Schema.String }),
+);
 const decodeAskedQuestions = Schema.decodeUnknownOption(
-  Schema.Struct({
-    questions: Schema.Array(
-      Schema.Struct({
-        ...UserInputQuestion.fields,
-        id: Schema.String,
-        header: Schema.String,
-        question: Schema.String,
-        options: Schema.Array(Schema.Unknown),
-      }),
-    ),
-  }),
+  Schema.Struct({ questions: Schema.Array(Schema.Unknown) }),
 );
 
 type AskedQuestion = Pick<UserInputQuestion, "id" | "header" | "question">;
@@ -26,7 +20,8 @@ type AskedQuestion = Pick<UserInputQuestion, "id" | "header" | "question">;
 export function readUserInputQuestions(payload: unknown): ReadonlyArray<AskedQuestion> {
   return Option.match(decodeAskedQuestions(payload), {
     onNone: () => [],
-    onSome: ({ questions }) => questions,
+    onSome: ({ questions }) =>
+      questions.flatMap((question) => Option.toArray(decodeAskedQuestion(question))),
   });
 }
 

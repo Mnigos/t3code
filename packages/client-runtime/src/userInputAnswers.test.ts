@@ -31,4 +31,18 @@ describe("formatUserInputAnswers", () => {
     expect(formatUserInputAnswers(questions, {})).toBeUndefined();
     expect(readUserInputQuestions({ questions: "nope" })).toEqual([]);
   });
+
+  it("keeps the questions it can read when a request row carries a malformed one", () => {
+    const asked = readUserInputQuestions({
+      questions: [
+        { id: "approach", header: "Approach", question: "How should we proceed?" },
+        { header: "No id" },
+        { id: "scope", header: "Scope", question: "Which areas?", options: [], multiSelect: true },
+      ],
+    });
+    expect(asked.map((question) => question.id)).toEqual(["approach", "scope"]);
+    expect(formatUserInputAnswers(asked, { approach: "Minimal", scope: ["Web"] })).toBe(
+      "Approach: Minimal\nScope: Web",
+    );
+  });
 });
