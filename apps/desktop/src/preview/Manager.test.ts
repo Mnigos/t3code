@@ -3994,6 +3994,17 @@ describe("PreviewManager", () => {
           yield* TestClock.adjust(200);
           expect((yield* Fiber.join(offscreen))._tag).toBe("Failure");
           expect(restoreFocus).toHaveBeenCalledTimes(2);
+
+          // Focus that moved to a third renderer while the click ran is left alone.
+          getFocusedWebContents
+            .mockReturnValueOnce({ id: 7, isDestroyed: () => false, focus: restoreFocus } as never)
+            .mockReturnValue({ id: 9, isDestroyed: () => false, focus: vi.fn() } as never);
+          const moved = yield* manager
+            .automationClick("tab_1", { x: 120, y: 80 })
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* TestClock.adjust(200);
+          yield* Fiber.join(moved);
+          expect(restoreFocus).toHaveBeenCalledTimes(2);
         }),
       ),
   );

@@ -3732,6 +3732,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (!previouslyFocused || previouslyFocused.id === wc.id || previouslyFocused.isDestroyed()) {
         return;
       }
+      // A newer selection the user made while the action ran wins over the restore.
+      const focusedNow = yield* attempt({ operation, tabId, webContentsId: wc.id }, () =>
+        webContents.getFocusedWebContents(),
+      ).pipe(Effect.orElseSucceed(() => null));
+      if (focusedNow && focusedNow.id !== wc.id && focusedNow.id !== previouslyFocused.id) {
+        return;
+      }
       yield* attempt({ operation, tabId, webContentsId: previouslyFocused.id }, () =>
         previouslyFocused.focus(),
       ).pipe(Effect.ignore);
