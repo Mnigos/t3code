@@ -1,45 +1,43 @@
-import type { UserInputQuestion } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
-type UserInputQuestionLike = Pick<UserInputQuestion, "id" | "header" | "question">;
+import { UserInputQuestion } from "@t3tools/contracts";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+// Older request rows can carry less than the current contract, and question
+// ids are the answer keys, so they are read as plain strings and never trimmed.
+const decodeAskedQuestions = Schema.decodeUnknownOption(
+  Schema.Struct({
+    questions: Schema.Array(
+      Schema.Struct({
+        ...UserInputQuestion.fields,
+        id: Schema.String,
+        header: Schema.String,
+        question: Schema.String,
+        options: Schema.Array(Schema.Unknown),
+      }),
+    ),
+  }),
+);
 
-function nonEmpty(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
+type AskedQuestion = Pick<UserInputQuestion, "id" | "header" | "question">;
 
-/**
- * The questions a `user-input.requested` payload carried, read structurally
- * so a row from an older server (or one with the questions stripped) still
- * yields an empty list rather than throwing.
- */
-export function readUserInputQuestions(payload: unknown): ReadonlyArray<UserInputQuestionLike> {
-  const questions = isRecord(payload) ? payload.questions : undefined;
-  if (!Array.isArray(questions)) return [];
-  const result: UserInputQuestionLike[] = [];
-  for (const question of questions) {
-    if (!isRecord(question)) continue;
-    const id = nonEmpty(question.id);
-    if (!id) continue;
-    result.push({
-      id,
-      header: nonEmpty(question.header) ?? "",
-      question: nonEmpty(question.question) ?? "",
-    });
-  }
-  return result;
+/** The questions a `user-input.requested` payload asked, in order. */
+export function readUserInputQuestions(payload: unknown): ReadonlyArray<AskedQuestion> {
+  return Option.match(decodeAskedQuestions(payload), {
+    onNone: () => [],
+    onSome: ({ questions }) => questions,
+  });
 }
 
 function formatAnswer(value: unknown): string | undefined {
   if (Array.isArray(value)) {
-    const parts = value.map(formatAnswer).filter((part): part is string => part !== undefined);
+    const parts = value.map(formatAnswer).filter(Predicate.isString);
     return parts.length > 0 ? parts.join(", ") : undefined;
   }
-  if (typeof value === "string") return nonEmpty(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (isRecord(value)) return JSON.stringify(value);
+  if (Predicate.isString(value)) return value.trim() || undefined;
+  if (Predicate.isNumber(value) || Predicate.isBoolean(value)) return String(value);
+  if (Predicate.isObject(value)) return JSON.stringify(value);
   return undefined;
 }
 
@@ -50,10 +48,10 @@ function formatAnswer(value: unknown): string | undefined {
  * under their key so nothing the user typed goes missing.
  */
 export function formatUserInputAnswers(
-  questions: ReadonlyArray<UserInputQuestionLike>,
+  questions: ReadonlyArray<AskedQuestion>,
   answers: unknown,
 ): string | undefined {
-  if (!isRecord(answers)) return undefined;
+  if (!Predicate.isObject(answers)) return undefined;
   const lines: string[] = [];
   const seen = new Set<string>();
   for (const question of questions) {
