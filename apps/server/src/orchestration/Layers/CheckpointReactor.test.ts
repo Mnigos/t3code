@@ -1334,7 +1334,8 @@ describe("CheckpointReactor", () => {
       secondThreadSharingWorktree: true,
       secondThreadWorktreePath: (cwd) => {
         const link = NodePath.join(linkParent, "worktree");
-        NodeFS.symlinkSync(cwd, link, "dir");
+        // A junction needs no symlink privilege on Windows; POSIX ignores the type.
+        NodeFS.symlinkSync(cwd, link, "junction");
         return link;
       },
     });
@@ -1371,7 +1372,7 @@ describe("CheckpointReactor", () => {
         secondThreadSharingWorktree: shared,
         pullRequestRefreshCalls,
       });
-      NodeFS.symlinkSync(harness.cwd, worktreePath, "dir");
+      NodeFS.symlinkSync(harness.cwd, worktreePath, "junction");
 
       harness.provider.emit({
         type: "turn.completed",
