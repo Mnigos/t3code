@@ -3739,6 +3739,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (focusedNow && focusedNow.id !== wc.id && focusedNow.id !== previouslyFocused.id) {
         return;
       }
+      // The user left T3 for another app while the action ran; do not pull them back.
+      if (focusedNow === null && BrowserWindow.getFocusedWindow() === null) {
+        return;
+      }
       yield* attempt({ operation, tabId, webContentsId: previouslyFocused.id }, () =>
         previouslyFocused.focus(),
       ).pipe(Effect.ignore);

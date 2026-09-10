@@ -181,6 +181,7 @@ const {
   createFromPath,
   fromId,
   getFocusedWebContents,
+  getFocusedWindow,
   mkdir,
   showItemInFolder,
   webviewSend,
@@ -188,6 +189,7 @@ const {
   writeClipboard,
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
+  getFocusedWindow: vi.fn<() => Electron.BrowserWindow | null>(() => null),
   clipboardItemConstructor: vi.fn(),
   createFromPath: vi.fn((): { readonly isEmpty: () => boolean; readonly toPNG: () => Buffer } => ({
     isEmpty: () => false,
@@ -203,7 +205,7 @@ const {
 }));
 
 vi.mock("electron", () => ({
-  BrowserWindow: browserWindowConstructor,
+  BrowserWindow: Object.assign(browserWindowConstructor, { getFocusedWindow }),
   ClipboardItem: class {
     constructor(data: Record<string, unknown>) {
       clipboardItemConstructor(data);
@@ -542,6 +544,8 @@ describe("PreviewManager", () => {
     fromId.mockClear();
     getFocusedWebContents.mockReset();
     getFocusedWebContents.mockReturnValue(null);
+    getFocusedWindow.mockReset();
+    getFocusedWindow.mockReturnValue({} as Electron.BrowserWindow);
     mkdir.mockClear();
     writeFile.mockClear();
     showItemInFolder.mockClear();
@@ -4004,6 +4008,19 @@ describe("PreviewManager", () => {
             .pipe(Effect.forkChild({ startImmediately: true }));
           yield* TestClock.adjust(200);
           yield* Fiber.join(moved);
+          expect(restoreFocus).toHaveBeenCalledTimes(2);
+
+          // The user switched to another app while the click ran: T3 has no focused
+          // window and no focused renderer, so nothing pulls them back.
+          getFocusedWebContents
+            .mockReturnValueOnce({ id: 7, isDestroyed: () => false, focus: restoreFocus } as never)
+            .mockReturnValue(null);
+          getFocusedWindow.mockReturnValue(null);
+          const left = yield* manager
+            .automationClick("tab_1", { x: 120, y: 80 })
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* TestClock.adjust(200);
+          yield* Fiber.join(left);
           expect(restoreFocus).toHaveBeenCalledTimes(2);
         }),
       ),
