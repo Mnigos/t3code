@@ -63,6 +63,16 @@ const resolveTargets = (input: {
   );
 
 const TAILSCALE_UP = { exitCode: 0, stdout: TAILSCALE_STATUS_JSON };
+const TAILSCALE_SSH = {
+  exitCode: 0,
+  stdout: JSON.stringify({
+    Self: {
+      DNSName: "bb-1.tail1234.ts.net.",
+      TailscaleIPs: ["100.64.1.2"],
+      SSH_HostKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"],
+    },
+  }),
+};
 const TAILSCALE_DOWN = { exitCode: 1, stdout: "" };
 
 describe("RemoteOpenTargets", () => {
@@ -74,6 +84,17 @@ describe("RemoteOpenTargets", () => {
         hostname: "bb-1",
       });
       expect(targets).toEqual([]);
+    }),
+  );
+
+  it.effect("advertises the tailnet name alone when only Tailscale SSH is serving", () =>
+    Effect.gen(function* () {
+      const targets = yield* resolveTargets({
+        sshd: { ipv4: false, ipv6: false },
+        tailscale: TAILSCALE_SSH,
+        hostname: "bb-1",
+      });
+      expect(targets).toEqual([{ kind: "tailscale", host: "bb-1.tail1234.ts.net" }]);
     }),
   );
 

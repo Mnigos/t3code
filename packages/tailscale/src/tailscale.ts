@@ -131,6 +131,7 @@ export class TailscaleStatusParseError extends Schema.TaggedError<TailscaleStatu
 const TailscaleStatusSelf = Schema.Struct({
   DNSName: Schema.optional(Schema.Unknown),
   TailscaleIPs: Schema.optional(Schema.Unknown),
+  SSH_HostKeys: Schema.optional(Schema.Unknown),
 });
 
 const TailscaleStatusJson = Schema.Struct({
@@ -142,6 +143,8 @@ export type TailscaleStatusJson = typeof TailscaleStatusJson.Type;
 export interface TailscaleStatus {
   readonly magicDnsName: string | null;
   readonly tailnetIpv4Addresses: readonly string[];
+  /** Tailscale SSH is serving on this node: it advertises SSH host keys. */
+  readonly sshEnabled: boolean;
 }
 
 const collectStdout = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -209,9 +212,14 @@ export const parseTailscaleStatus = (
         }
       }
 
+      const rawHostKeys = parsed.Self?.SSH_HostKeys;
+      const sshEnabled =
+        Array.isArray(rawHostKeys) && rawHostKeys.some((key) => typeof key === "string" && key);
+
       return {
         magicDnsName: normalizeMagicDnsName(parsed),
         tailnetIpv4Addresses,
+        sshEnabled,
       };
     }),
   );

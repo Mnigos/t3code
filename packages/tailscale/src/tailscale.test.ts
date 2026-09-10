@@ -149,7 +149,14 @@ describe("tailscale", () => {
       assert.deepEqual(status, {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.100.100.100"],
+        sshEnabled: false,
       });
+      const sshStatus = yield* parseTailscaleStatus(
+        '{"Self":{"DNSName":"box.tail.ts.net.","SSH_HostKeys":["ssh-ed25519 AAAA"]}}',
+      );
+      assert.equal(sshStatus.sshEnabled, true);
+      const noKeys = yield* parseTailscaleStatus('{"Self":{"SSH_HostKeys":[]}}');
+      assert.equal(noKeys.sshEnabled, false);
     }),
   );
 
@@ -191,6 +198,7 @@ describe("tailscale", () => {
       assert.deepEqual(status, {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.90.1.2"],
+        sshEnabled: false,
       });
     });
   });

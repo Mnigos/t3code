@@ -3,7 +3,8 @@
  * for remote open-in-editor deep links (`vscode://vscode-remote/ssh-remote+…`).
  *
  * The server can only check itself: sshd listening locally, tailscaled
- * reporting a MagicDNS name, and the machine hostname for mDNS. Whether a
+ * reporting a MagicDNS name and whether Tailscale SSH serves it, and the
+ * machine hostname for mDNS. Whether a
  * given name resolves from the viewer's machine is inherently client-side.
  * Targets are ordered most-reachable first (tailnet name works from anywhere
  * on the tailnet; `<hostname>.local` only on the same LAN).
@@ -32,36 +33,37 @@ export const make = Effect.gen(function* () {
   const net = yield* NetService.NetService;
 
   const resolveTargets = Effect.gen(function* () {
-    // No local sshd means no name can work; advertise nothing so clients
-    // render a clear "no SSH route" state instead of links that hang.
     // Check both loopback families: sshd can be bound IPv6-only.
     const sshdListening = yield* Effect.zipWith(
       net.hasListenerOnHost(SSH_PORT, "127.0.0.1"),
       net.hasListenerOnHost(SSH_PORT, "::1"),
       (ipv4, ipv6) => ipv4 || ipv6,
     );
-    if (!sshdListening) {
-      return [];
-    }
-
-    const targets: Array<RemoteOpenTarget> = [];
 
     // Tailscale absent or down is the common case, not an error.
-    const magicDnsName = yield* readTailscaleStatus.pipe(
-      Effect.map((status) => status.magicDnsName),
+    const tailscale = yield* readTailscaleStatus.pipe(
       Effect.orElseSucceed(() => null),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
-    if (magicDnsName !== null) {
-      targets.push({ kind: "tailscale", host: magicDnsName });
+
+    const targets: Array<RemoteOpenTarget> = [];
+
+    // Tailscale SSH answers on the tailnet name without any local sshd, so
+    // the tailnet target only needs one of the two to be serving.
+    if (tailscale?.magicDnsName && (sshdListening || tailscale.sshEnabled)) {
+      targets.push({ kind: "tailscale", host: tailscale.magicDnsName });
     }
 
+    // Without a local sshd no LAN name can work; advertise nothing there so
+    // clients render a clear "no SSH route" state instead of links that hang.
     // os.hostname() may already be an FQDN (macOS often reports
     // "Name.local"); mDNS names are always `<first-label>.local`.
-    const hostname = yield* HostProcessHostname;
-    const shortHostname = hostname.split(".")[0]?.trim();
-    if (shortHostname !== undefined && shortHostname.length > 0) {
-      targets.push({ kind: "mdns", host: `${shortHostname}.local` });
+    if (sshdListening) {
+      const hostname = yield* HostProcessHostname;
+      const shortHostname = hostname.split(".")[0]?.trim();
+      if (shortHostname !== undefined && shortHostname.length > 0) {
+        targets.push({ kind: "mdns", host: `${shortHostname}.local` });
+      }
     }
 
     return targets;
