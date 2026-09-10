@@ -14,6 +14,12 @@ import * as RemoteOpenTargets from "./RemoteOpenTargets.ts";
 const encoder = new TextEncoder();
 
 const TAILSCALE_STATUS_JSON = JSON.stringify({
+  BackendState: "Running",
+  Self: { DNSName: "bb-1.tail1234.ts.net.", TailscaleIPs: ["100.64.1.2"] },
+});
+// `tailscale down` keeps the node name in the status output but nothing answers on it.
+const TAILSCALE_STOPPED_STATUS_JSON = JSON.stringify({
+  BackendState: "Stopped",
   Self: { DNSName: "bb-1.tail1234.ts.net.", TailscaleIPs: ["100.64.1.2"] },
 });
 
@@ -116,6 +122,26 @@ describe("RemoteOpenTargets", () => {
         hostname: "bb-1",
       });
       expect(targets).toEqual([]);
+    }),
+  );
+
+  it.effect("does not advertise a stopped daemon's name even with SSH enabled", () =>
+    Effect.gen(function* () {
+      const targets = yield* resolveTargets({
+        sshd: { ipv4: false, ipv6: false },
+        tailscale: {
+          status: { exitCode: 0, stdout: TAILSCALE_STOPPED_STATUS_JSON },
+          prefs: TAILSCALE_PREFS_SSH,
+        },
+        hostname: "bb-1",
+      });
+      expect(targets).toEqual([]);
+      const withSshd = yield* resolveTargets({
+        sshd: { ipv4: true, ipv6: false },
+        tailscale: { status: { exitCode: 0, stdout: TAILSCALE_STOPPED_STATUS_JSON } },
+        hostname: "bb-1",
+      });
+      expect(withSshd).toEqual([{ kind: "mdns", host: "bb-1.local" }]);
     }),
   );
 

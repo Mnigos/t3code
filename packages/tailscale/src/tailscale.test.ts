@@ -66,7 +66,7 @@ function assertCarriesNoSecret(error: object, secret: string): void {
 
   walk(error, "error");
 }
-const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20"]}}`;
+const tailscaleStatusJson = `{"BackendState":"Running","Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20"]}}`;
 // Real `tailscale debug prefs` output (trimmed), as printed by tailscale 1.94 on a node
 // brought up with `tailscale up --ssh`.
 const tailscalePrefsWithSshJson = `{
@@ -89,7 +89,7 @@ const tailscalePrefsWithSshJson = `{
 }
 `;
 
-const tailscaleStatusWithSingleIpJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.90.1.2"]}}`;
+const tailscaleStatusWithSingleIpJson = `{"BackendState":"Running","Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.90.1.2"]}}`;
 
 function mockHandle(result: { stdout?: string; stderr?: string; code?: number }) {
   return ChildProcessSpawner.makeHandle({
@@ -173,7 +173,13 @@ describe("tailscale", () => {
       assert.deepEqual(status, {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.100.100.100"],
+        running: true,
       });
+      const stopped = yield* parseTailscaleStatus(
+        '{"BackendState":"Stopped","Self":{"DNSName":"desktop.tail.ts.net."}}',
+      );
+      assert.equal(stopped.running, false);
+      assert.equal(stopped.magicDnsName, "desktop.tail.ts.net");
     }),
   );
 
@@ -215,6 +221,7 @@ describe("tailscale", () => {
       assert.deepEqual(status, {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.90.1.2"],
+        running: true,
       });
     });
   });

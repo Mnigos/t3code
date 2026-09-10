@@ -40,9 +40,10 @@ export const make = Effect.gen(function* () {
       (ipv4, ipv6) => ipv4 || ipv6,
     );
 
-    // Tailscale absent or down is the common case, not an error.
+    // Tailscale absent or down is the common case, not an error. A stopped
+    // daemon still reports its name, and nothing can reach it.
     const magicDnsName = yield* readTailscaleStatus.pipe(
-      Effect.map((status) => status.magicDnsName),
+      Effect.map((status) => (status.running ? status.magicDnsName : null)),
       Effect.orElseSucceed(() => null),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
