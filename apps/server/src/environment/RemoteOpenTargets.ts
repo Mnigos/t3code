@@ -3,8 +3,8 @@
  * for remote open-in-editor deep links (`vscode://vscode-remote/ssh-remote+…`).
  *
  * The server can only check itself: sshd listening locally, tailscaled
- * reporting a MagicDNS name and whether Tailscale SSH serves it, and the
- * machine hostname for mDNS. Whether a
+ * reporting a MagicDNS name, its prefs saying whether Tailscale SSH serves that
+ * name, and the machine hostname for mDNS. Whether a
  * given name resolves from the viewer's machine is inherently client-side.
  * Targets are ordered most-reachable first (tailnet name works from anywhere
  * on the tailnet; `<hostname>.local` only on the same LAN).
@@ -12,7 +12,7 @@
 import { type RemoteOpenTarget } from "@t3tools/contracts";
 import { HostProcessHostname } from "@t3tools/shared/hostProcess";
 import * as NetService from "@t3tools/shared/Net";
-import { readTailscaleStatus } from "@t3tools/tailscale";
+import { readTailscaleSshEnabled, readTailscaleStatus } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -41,17 +41,26 @@ export const make = Effect.gen(function* () {
     );
 
     // Tailscale absent or down is the common case, not an error.
-    const tailscale = yield* readTailscaleStatus.pipe(
+    const magicDnsName = yield* readTailscaleStatus.pipe(
+      Effect.map((status) => status.magicDnsName),
       Effect.orElseSucceed(() => null),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
+    // Tailscale SSH answers on the tailnet name without any local sshd, so
+    // the tailnet target only needs one of the two to be serving. A running
+    // tailscaled alone (`--tailscale-serve`) is not an SSH route.
+    const tailscaleSshServing =
+      magicDnsName !== null &&
+      !sshdListening &&
+      (yield* readTailscaleSshEnabled.pipe(
+        Effect.orElseSucceed(() => false),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      ));
 
     const targets: Array<RemoteOpenTarget> = [];
 
-    // Tailscale SSH answers on the tailnet name without any local sshd, so
-    // the tailnet target only needs one of the two to be serving.
-    if (tailscale?.magicDnsName && (sshdListening || tailscale.sshEnabled)) {
-      targets.push({ kind: "tailscale", host: tailscale.magicDnsName });
+    if (magicDnsName !== null && (sshdListening || tailscaleSshServing)) {
+      targets.push({ kind: "tailscale", host: magicDnsName });
     }
 
     // Without a local sshd no LAN name can work; advertise nothing there so

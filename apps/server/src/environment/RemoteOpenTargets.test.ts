@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import { describe, expect } from "vite-plus/test";
 
@@ -16,27 +17,34 @@ const TAILSCALE_STATUS_JSON = JSON.stringify({
   Self: { DNSName: "bb-1.tail1234.ts.net.", TailscaleIPs: ["100.64.1.2"] },
 });
 
-/** Spawner whose `tailscale status --json` exits with the given output. */
-const spawnerLayer = (input: { readonly exitCode: number; readonly stdout: string }) =>
+interface CommandResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+}
+
+/** Spawner answering `tailscale status --json` and `tailscale debug prefs` separately. */
+const spawnerLayer = (input: { readonly status: CommandResult; readonly prefs?: CommandResult }) =>
   Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() =>
-      Effect.succeed(
+    ChildProcessSpawner.make((command) => {
+      const args = ChildProcess.isStandardCommand(command) ? command.args : [];
+      const result = args[0] === "debug" ? (input.prefs ?? TAILSCALE_PREFS_NO_SSH) : input.status;
+      return Effect.succeed(
         ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(input.exitCode)),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.exitCode)),
           isRunning: Effect.succeed(false),
           kill: () => Effect.void,
           unref: Effect.succeed(Effect.void),
           stdin: Sink.drain,
-          stdout: Stream.make(encoder.encode(input.stdout)),
+          stdout: Stream.make(encoder.encode(result.stdout)),
           stderr: Stream.empty,
           all: Stream.empty,
           getInputFd: () => Sink.drain,
           getOutputFd: () => Stream.empty,
         }),
-      ),
-    ),
+      );
+    }),
   );
 
 const netLayer = (input: { readonly ipv4: boolean; readonly ipv6: boolean }) =>
@@ -50,7 +58,7 @@ const netLayer = (input: { readonly ipv4: boolean; readonly ipv6: boolean }) =>
 
 const resolveTargets = (input: {
   readonly sshd: { readonly ipv4: boolean; readonly ipv6: boolean };
-  readonly tailscale: { readonly exitCode: number; readonly stdout: string };
+  readonly tailscale: { readonly status: CommandResult; readonly prefs?: CommandResult };
   readonly hostname: string;
 }) =>
   Effect.flatMap(RemoteOpenTargets.RemoteOpenTargets, (service) => service.resolveTargets()).pipe(
@@ -62,18 +70,20 @@ const resolveTargets = (input: {
     ),
   );
 
-const TAILSCALE_UP = { exitCode: 0, stdout: TAILSCALE_STATUS_JSON };
-const TAILSCALE_SSH = {
+// `tailscale debug prefs` as printed by tailscale 1.94 (trimmed); RunSSH is the SSH switch.
+const TAILSCALE_PREFS_NO_SSH = {
   exitCode: 0,
-  stdout: JSON.stringify({
-    Self: {
-      DNSName: "bb-1.tail1234.ts.net.",
-      TailscaleIPs: ["100.64.1.2"],
-      SSH_HostKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"],
-    },
-  }),
+  stdout:
+    '{\n\t"ControlURL": "https://controlplane.tailscale.com",\n\t"RunSSH": false,\n\t"WantRunning": true\n}\n',
 };
-const TAILSCALE_DOWN = { exitCode: 1, stdout: "" };
+const TAILSCALE_PREFS_SSH = {
+  exitCode: 0,
+  stdout:
+    '{\n\t"ControlURL": "https://controlplane.tailscale.com",\n\t"RunSSH": true,\n\t"WantRunning": true\n}\n',
+};
+const TAILSCALE_UP = { status: { exitCode: 0, stdout: TAILSCALE_STATUS_JSON } };
+const TAILSCALE_SSH = { status: TAILSCALE_UP.status, prefs: TAILSCALE_PREFS_SSH };
+const TAILSCALE_DOWN = { status: { exitCode: 1, stdout: "" }, prefs: { exitCode: 1, stdout: "" } };
 
 describe("RemoteOpenTargets", () => {
   it.effect("advertises nothing when no sshd accepts on either loopback", () =>
@@ -95,6 +105,17 @@ describe("RemoteOpenTargets", () => {
         hostname: "bb-1",
       });
       expect(targets).toEqual([{ kind: "tailscale", host: "bb-1.tail1234.ts.net" }]);
+    }),
+  );
+
+  it.effect("ignores the SSH pref while tailscale is down", () =>
+    Effect.gen(function* () {
+      const targets = yield* resolveTargets({
+        sshd: { ipv4: false, ipv6: false },
+        tailscale: { status: TAILSCALE_DOWN.status, prefs: TAILSCALE_PREFS_SSH },
+        hostname: "bb-1",
+      });
+      expect(targets).toEqual([]);
     }),
   );
 
