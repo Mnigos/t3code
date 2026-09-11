@@ -210,6 +210,32 @@ describe("claudeUsageResponseToLimits", () => {
       }).limits.windows,
     ).toEqual([]);
   });
+
+  it("skips the budget when the used amount is unknown but keeps a reported zero", () => {
+    const windowsFor = (used_credits: number | null) =>
+      claudeUsageResponseToLimits({
+        checkedAt,
+        response: {
+          rate_limits_available: true,
+          rate_limits: {
+            five_hour: { utilization: 12, resets_at: "2026-07-18T14:39:00Z" },
+            extra_usage: {
+              is_enabled: true,
+              monthly_limit: 2000,
+              used_credits,
+              utilization: null,
+              ...({ currency: "USD" } as object),
+            },
+          },
+        },
+      }).limits.windows;
+
+    expect(windowsFor(null).map((window) => window.id)).toEqual(["five_hour"]);
+    expect(windowsFor(0).find((window) => window.id === "monthly_spend")).toMatchObject({
+      usedPercent: 0,
+      spend: { usedMinor: 0, limitMinor: 2000, currency: "USD" },
+    });
+  });
 });
 
 describe("claudeRateLimitEventToUpdate", () => {
