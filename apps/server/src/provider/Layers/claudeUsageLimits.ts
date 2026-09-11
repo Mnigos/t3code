@@ -168,9 +168,12 @@ function readSpendBudget(rateLimits: object): SpendBudget | undefined {
   }
   if (isRecord(extraUsage) && extraUsage.is_enabled === true) {
     const limit = extraUsage.monthly_limit;
-    if (isMinorInt(limit) && limit > 0) {
+    const used = extraUsage.used_credits;
+    // A null balance is unknown, not zero: without a used amount there is no
+    // monetary row to draw, while a reported 0 still shows as nothing spent.
+    if (isMinorInt(limit) && limit > 0 && isMinorInt(used)) {
       return {
-        usedMinor: isMinorInt(extraUsage.used_credits) ? extraUsage.used_credits : 0,
+        usedMinor: used,
         limitMinor: limit,
         currency: typeof extraUsage.currency === "string" ? extraUsage.currency : "USD",
         exponent: isMinorInt(extraUsage.decimal_places) ? extraUsage.decimal_places : 2,
