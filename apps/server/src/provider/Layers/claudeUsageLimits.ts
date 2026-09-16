@@ -132,20 +132,25 @@ function isMoneyExponent(value: unknown): value is number {
   return isMinorInt(value) && value <= MAX_MONEY_EXPONENT;
 }
 
+/** The currency code as the contract wants it: trimmed, never blank. */
+function readCurrency(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const currency = value.trim();
+  return currency.length > 0 ? currency : undefined;
+}
+
 function readMoney(
   value: unknown,
 ):
   | { readonly amountMinor: number; readonly currency: string; readonly exponent: number }
   | undefined {
-  if (
-    !isRecord(value) ||
-    !isMinorInt(value.amount_minor) ||
-    typeof value.currency !== "string" ||
-    !isMoneyExponent(value.exponent)
-  ) {
+  if (!isRecord(value) || !isMinorInt(value.amount_minor) || !isMoneyExponent(value.exponent)) {
     return undefined;
   }
-  return { amountMinor: value.amount_minor, currency: value.currency, exponent: value.exponent };
+  const currency = readCurrency(value.currency);
+  return currency === undefined
+    ? undefined
+    : { amountMinor: value.amount_minor, currency, exponent: value.exponent };
 }
 
 /**
@@ -182,13 +187,17 @@ function readSpendBudget(rateLimits: object): SpendBudget | undefined {
     // A null balance is unknown, not zero: without a used amount there is no
     // monetary row to draw, while a reported 0 still shows as nothing spent.
     const exponent = extraUsage.decimal_places === undefined ? 2 : extraUsage.decimal_places;
-    if (isMinorInt(limit) && limit > 0 && isMinorInt(used) && isMoneyExponent(exponent)) {
-      return {
-        usedMinor: used,
-        limitMinor: limit,
-        currency: typeof extraUsage.currency === "string" ? extraUsage.currency : "USD",
-        exponent,
-      };
+    // Credits default to dollars; a blank explicit currency is a broken payload.
+    const currency =
+      typeof extraUsage.currency === "string" ? readCurrency(extraUsage.currency) : "USD";
+    if (
+      isMinorInt(limit) &&
+      limit > 0 &&
+      isMinorInt(used) &&
+      isMoneyExponent(exponent) &&
+      currency !== undefined
+    ) {
+      return { usedMinor: used, limitMinor: limit, currency, exponent };
     }
   }
   return undefined;

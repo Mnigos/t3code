@@ -273,6 +273,38 @@ describe("claudeUsageResponseToLimits", () => {
       idsFor({ spend: { enabled: true, used: money(20), limit: money(20) } } as object),
     ).toEqual(["five_hour", "monthly_spend"]);
   });
+
+  it("trims the currency code and skips a budget whose currency is blank", () => {
+    const money = (currency: string) => ({ amount_minor: 100, currency, exponent: 2 });
+    const spendFor = (rateLimits: object) =>
+      claudeUsageResponseToLimits({
+        checkedAt,
+        response: {
+          rate_limits_available: true,
+          rate_limits: {
+            five_hour: { utilization: 12, resets_at: "2026-07-18T14:39:00Z" },
+            ...rateLimits,
+          },
+        },
+      }).limits.windows.find((window) => window.id === "monthly_spend")?.spend;
+
+    expect(
+      spendFor({ spend: { enabled: true, used: money(" EUR "), limit: money("EUR ") } } as object),
+    ).toMatchObject({ currency: "EUR" });
+    expect(
+      spendFor({ spend: { enabled: true, used: money("  "), limit: money("  ") } } as object),
+    ).toBeUndefined();
+    expect(
+      spendFor({
+        extra_usage: { is_enabled: true, monthly_limit: 2000, used_credits: 100, currency: "" },
+      } as object),
+    ).toBeUndefined();
+    expect(
+      spendFor({
+        extra_usage: { is_enabled: true, monthly_limit: 2000, used_credits: 100, currency: null },
+      } as object),
+    ).toMatchObject({ currency: "USD" });
+  });
 });
 
 describe("claudeRateLimitEventToUpdate", () => {
