@@ -236,6 +236,43 @@ describe("claudeUsageResponseToLimits", () => {
       spend: { usedMinor: 0, limitMinor: 2000, currency: "USD" },
     });
   });
+
+  it("skips a budget whose exponent no currency could have", () => {
+    const money = (exponent: number) => ({
+      amount_minor: 10 ** 6,
+      currency: "USD",
+      exponent,
+    });
+    const idsFor = (rateLimits: object) =>
+      claudeUsageResponseToLimits({
+        checkedAt,
+        response: {
+          rate_limits_available: true,
+          rate_limits: {
+            five_hour: { utilization: 12, resets_at: "2026-07-18T14:39:00Z" },
+            ...rateLimits,
+          },
+        },
+      }).limits.windows.map((window) => window.id);
+
+    expect(
+      idsFor({ spend: { enabled: true, used: money(21), limit: money(21) } } as object),
+    ).toEqual(["five_hour"]);
+    expect(
+      idsFor({
+        extra_usage: {
+          is_enabled: true,
+          monthly_limit: 2000,
+          used_credits: 100,
+          utilization: null,
+          decimal_places: 309,
+        },
+      } as object),
+    ).toEqual(["five_hour"]);
+    expect(
+      idsFor({ spend: { enabled: true, used: money(20), limit: money(20) } } as object),
+    ).toEqual(["five_hour", "monthly_spend"]);
+  });
 });
 
 describe("claudeRateLimitEventToUpdate", () => {
