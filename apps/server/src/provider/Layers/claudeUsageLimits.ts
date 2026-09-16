@@ -122,6 +122,16 @@ function isMinorInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+/**
+ * No real currency has more than four decimals, and the clients format at
+ * most twenty; a wilder exponent is a malformed budget, not a precision.
+ */
+const MAX_MONEY_EXPONENT = 20;
+
+function isMoneyExponent(value: unknown): value is number {
+  return isMinorInt(value) && value <= MAX_MONEY_EXPONENT;
+}
+
 function readMoney(
   value: unknown,
 ):
@@ -131,7 +141,7 @@ function readMoney(
     !isRecord(value) ||
     !isMinorInt(value.amount_minor) ||
     typeof value.currency !== "string" ||
-    !isMinorInt(value.exponent)
+    !isMoneyExponent(value.exponent)
   ) {
     return undefined;
   }
@@ -171,12 +181,13 @@ function readSpendBudget(rateLimits: object): SpendBudget | undefined {
     const used = extraUsage.used_credits;
     // A null balance is unknown, not zero: without a used amount there is no
     // monetary row to draw, while a reported 0 still shows as nothing spent.
-    if (isMinorInt(limit) && limit > 0 && isMinorInt(used)) {
+    const exponent = extraUsage.decimal_places === undefined ? 2 : extraUsage.decimal_places;
+    if (isMinorInt(limit) && limit > 0 && isMinorInt(used) && isMoneyExponent(exponent)) {
       return {
         usedMinor: used,
         limitMinor: limit,
         currency: typeof extraUsage.currency === "string" ? extraUsage.currency : "USD",
-        exponent: isMinorInt(extraUsage.decimal_places) ? extraUsage.decimal_places : 2,
+        exponent,
       };
     }
   }
