@@ -34,6 +34,17 @@ import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPr
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 
+/**
+ * Left inset for the sheet-mode sidebar trigger. On macOS desktop the header
+ * sits under the native window buttons, so the trigger takes the same left
+ * edge as the floating `SidebarControl` (`--workspace-controls-left`, 90
+ * native points there, `0.75rem` elsewhere and in fullscreen) instead of the
+ * header's own `px-3`. Web and mobile keep the header padding.
+ */
+export function resolveSidebarSheetTriggerInsetClass(isElectron: boolean): string | null {
+  return isElectron ? "ml-[calc(var(--workspace-controls-left)-0.75rem)]" : null;
+}
+
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
 }: {
@@ -61,6 +72,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       <SidebarTrigger
         className={cn(
           "relative z-10 md:hidden",
+          resolveSidebarSheetTriggerInsetClass(isElectron),
           backdropVariant &&
             "focus-visible:ring-white/90 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white! [:hover,[data-pressed]]:bg-white/15",
           backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
