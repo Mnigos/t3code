@@ -1,3 +1,5 @@
+import type { WorktreeSetupCardProps } from "./worktree-setup-card";
+import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   appendCodexArtifactTemplateUsePrompt,
@@ -26,8 +28,6 @@ import type {
   UserInputQuestion,
 } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
-import { BlurTargetView } from "expo-blur";
-import { GlassBlurTargetContext } from "../../lib/glassBlurTarget";
 import {
   memo,
   useCallback,
@@ -58,11 +58,12 @@ import Animated, {
   FadeOut,
   ReduceMotion,
   useAnimatedReaction,
+  useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
+import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
@@ -106,6 +107,8 @@ import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
 export interface ThreadDetailScreenProps {
+  readonly worktreeSetup?: WorktreeSetupCardProps | null;
+  readonly setupWorkingStartedAt?: string | null;
   readonly selectedThread: OrchestrationThreadShell;
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
@@ -153,6 +156,7 @@ export interface ThreadDetailScreenProps {
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
+  readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
@@ -360,6 +364,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       return null;
     }
     if (props.creationState?.kind === "preparing") {
+      // The setup header already reports progress in the feed.
+      if (props.worktreeSetup) return null;
       return {
         kind: "preparing",
         label: props.creationState.preparingWorktree ? "Setting up worktree…" : "Starting…",
@@ -647,6 +653,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const layoutVariant = props.layoutVariant ?? "compact";
   const isSplitLayout = layoutVariant === "split";
   const contentMaxWidth = isSplitLayout ? CHAT_CONTENT_MAX_WIDTH : undefined;
+  const workspaceContentWidth = useWorkspaceContentWidth();
+  const composerWidthStyle = useAnimatedStyle(() =>
+    isSplitLayout && workspaceContentWidth !== null
+      ? { width: workspaceContentWidth.value, right: undefined }
+      : { width: undefined, right: 0 },
+  );
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
   const selectedProviderSkills = useMemo(() => {
@@ -809,7 +821,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [freeze, scrollMessageToEnd]);
 
   const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
-  const { themeAppearance, materialYouStyleLayoutActive } = useAppearancePreferences();
+  const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
 
   const handleFeedTouchStart = useCallback((event: GestureResponderEvent) => {
@@ -841,13 +853,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const handleFeedTouchCancel = useCallback(() => {
     feedTouchStartRef.current = null;
   }, []);
-  const feedBlurTarget = useRef<View>(null);
 
   return (
     <View className="flex-1">
       {showContent ? (
-        <BlurTargetView
-          ref={feedBlurTarget}
+        <View
           style={{ flex: 1 }}
           onTouchStart={handleFeedTouchStart}
           onTouchMove={handleFeedTouchMove}
@@ -857,7 +867,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           <View
             pointerEvents="none"
             className={
-              materialYouStyleLayoutActive
+              Platform.OS === "android"
                 ? "absolute inset-0 bg-thread-canvas"
                 : "absolute inset-0 bg-screen"
             }
@@ -868,6 +878,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             threadId={props.selectedThread.id}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}
+            worktreeSetup={props.worktreeSetup}
+            setupWorkingStartedAt={props.setupWorkingStartedAt}
             queuedMessages={props.queuedMessages}
             dispatchingMessageId={props.dispatchingMessageId}
             onEditPendingMessage={handleEditPendingMessage}
@@ -893,7 +905,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             onUseArtifactTemplate={handleUseArtifactTemplate}
             loadEarlier={props.loadEarlier ?? null}
           />
-        </BlurTargetView>
+        </View>
       ) : (
         <View className="flex-1" />
       )}
@@ -915,7 +927,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           <Animated.View
             layout={COMPOSER_LAYOUT_TRANSITION}
             pointerEvents="box-none"
-            style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
+            style={[{ position: "absolute", bottom: 0, left: 0, right: 0 }, composerWidthStyle]}
           >
             {/* No paddingTop here: the overlay's measured height becomes the
                 list's bottom inset, so any padding above the pill/composer
@@ -1015,43 +1027,42 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     : undefined
                 }
               >
-                <GlassBlurTargetContext value={feedBlurTarget}>
-                  <ThreadComposer
-                    editorRef={composerEditorRef}
-                    draftMessage={props.draftMessage}
-                    draftAttachments={props.draftAttachments}
-                    placeholder="Ask the repo agent, or run a command…"
-                    contentMaxWidth={contentMaxWidth}
-                    connectionState={props.connectionStateLabel}
-                    environmentLabel={props.environmentLabel}
-                    selectedThread={props.selectedThread}
-                    hasCompactableConversation={hasCompactableConversation && !props.isCompacting}
-                    serverConfig={props.serverConfig}
-                    queueCount={props.selectedThreadQueueCount}
-                    environmentId={props.environmentId}
-                    projectCwd={props.threadCwd ?? props.projectWorkspaceRoot}
-                    // Follow-ups typed during setup wait in the draft: queueing
-                    // them against a thread id the server may still reject
-                    // would strand them in the outbox.
-                    sendBlockedReason={
-                      props.creationState?.kind === "preparing" ? "Starting the task…" : null
-                    }
-                    bottomInset={composerBottomInset}
-                    onChangeDraftMessage={props.onChangeDraftMessage}
-                    onPickDraftMedia={props.onPickDraftMedia}
-                    onPickDraftFiles={props.onPickDraftFiles}
-                    onNativePasteImages={props.onNativePasteImages}
-                    onRemoveDraftImage={props.onRemoveDraftImage}
-                    onStopThread={props.onStopThread}
-                    onSendMessage={handleSendMessage}
-                    onShowUsageLimits={showUsageLimits}
-                    onUpdateModelSelection={props.onUpdateThreadModelSelection}
-                    onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
-                    onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
-                    onExpandedChange={setComposerExpanded}
-                    onEditorFocusChange={handleComposerFocusChange}
-                  />
-                </GlassBlurTargetContext>
+                <ThreadComposer
+                  editorRef={composerEditorRef}
+                  draftMessage={props.draftMessage}
+                  draftAttachments={props.draftAttachments}
+                  placeholder="Ask the repo agent, or run a command…"
+                  contentMaxWidth={contentMaxWidth}
+                  connectionState={props.connectionStateLabel}
+                  environmentLabel={props.environmentLabel}
+                  selectedThread={props.selectedThread}
+                  hasCompactableConversation={hasCompactableConversation && !props.isCompacting}
+                  serverConfig={props.serverConfig}
+                  queueCount={props.selectedThreadQueueCount}
+                  environmentId={props.environmentId}
+                  projectCwd={props.threadCwd ?? props.projectWorkspaceRoot}
+                  // Follow-ups typed during setup wait in the draft: queueing
+                  // them against a thread id the server may still reject
+                  // would strand them in the outbox.
+                  sendBlockedReason={
+                    props.creationState?.kind === "preparing" ? "Starting the task…" : null
+                  }
+                  bottomInset={composerBottomInset}
+                  onChangeDraftMessage={props.onChangeDraftMessage}
+                  onPickDraftMedia={props.onPickDraftMedia}
+                  onPickDraftFiles={props.onPickDraftFiles}
+                  onNativePasteImages={props.onNativePasteImages}
+                  onNativePasteText={props.onNativePasteText}
+                  onRemoveDraftImage={props.onRemoveDraftImage}
+                  onStopThread={props.onStopThread}
+                  onSendMessage={handleSendMessage}
+                  onShowUsageLimits={showUsageLimits}
+                  onUpdateModelSelection={props.onUpdateThreadModelSelection}
+                  onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
+                  onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
+                  onExpandedChange={setComposerExpanded}
+                  onEditorFocusChange={handleComposerFocusChange}
+                />
               </View>
             </View>
           </Animated.View>
