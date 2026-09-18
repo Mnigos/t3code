@@ -35,10 +35,10 @@ describe("buildPatchCacheKey", () => {
 
 describe("getRenderablePatch", () => {
   it.each([
-    ["a/example.ts", "a/example.ts"],
-    ["b/example.ts", "b/example.ts"],
-    ["a/before.ts", "b/after.ts"],
-  ])("preserves repository paths from %s to %s", (previousPath, path) => {
+    ["a/example.ts", "a/example.ts", "change"],
+    ["b/example.ts", "b/example.ts", "change"],
+    ["a/before.ts", "b/after.ts", "rename-changed"],
+  ])("preserves repository paths from %s to %s", (previousPath, path, type) => {
     const parsed = getRenderablePatch(
       [
         `diff --git a/${previousPath} b/${path}`,
@@ -59,7 +59,7 @@ describe("getRenderablePatch", () => {
     if (!file) return;
     expect(resolveFileDiffPath(file)).toBe(path);
     expect(resolveFileDiffPreviousPath(file)).toBe(previousPath);
-    expect(buildFileDiffIdentityKey(file)).toBe(`${previousPath}\0${path}`);
+    expect(buildFileDiffIdentityKey(file)).toBe(`${previousPath}\0${path}\0${type}`);
   });
 
   it("compacts partial hunk render offsets for virtualized review diffs", () => {

@@ -118,9 +118,9 @@ describe("diff tree file activation", () => {
   it("mounts a file-to-symlink type change as one tree row", async () => {
     // Git carries a type change as a deletion and an addition of the same path.
     const typeChange = diffFileTreeEntries([
-      { type: "deleted", name: "b/AGENTS.md", prevName: "a/AGENTS.md" } as FileDiffMetadata,
-      { type: "new", name: "b/AGENTS.md", prevName: "a/AGENTS.md" } as FileDiffMetadata,
-      { type: "change", name: "b/CLAUDE.md", prevName: "a/CLAUDE.md" } as FileDiffMetadata,
+      { type: "deleted", name: "AGENTS.md", prevName: "AGENTS.md" } as FileDiffMetadata,
+      { type: "new", name: "AGENTS.md", prevName: "AGENTS.md" } as FileDiffMetadata,
+      { type: "change", name: "CLAUDE.md", prevName: "CLAUDE.md" } as FileDiffMetadata,
     ]);
     await mount({ files: [...typeChange] });
 
