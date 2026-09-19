@@ -163,6 +163,8 @@ process.exit(0);
     targetVersion: "1.1.0",
     dbPath: "/tmp/state.sqlite",
   };
+  // @effect-diagnostics-next-line preferSchemaOverJson:off - writes fixed state fixtures to disk.
+  const encodeState = (state: unknown) => `${JSON.stringify(state, null, 2)}\n`;
   for (const [name, state] of [
     [
       "pending update",
@@ -186,8 +188,7 @@ process.exit(0);
         const path = yield* Path.Path;
         const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-reject-" });
         const statePath = path.join(root, "runtime", "service-state.json");
-        const contents =
-          state === undefined ? "{ invalid JSON\n" : `${JSON.stringify(state, null, 2)}\n`;
+        const contents = state === undefined ? "{ invalid JSON\n" : encodeState(state);
         yield* fs.makeDirectory(path.dirname(statePath), { recursive: true });
         yield* fs.writeFileString(statePath, contents);
 
