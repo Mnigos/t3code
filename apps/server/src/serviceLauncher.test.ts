@@ -163,7 +163,6 @@ process.exit(0);
     targetVersion: "1.1.0",
     dbPath: "/tmp/state.sqlite",
   };
-  // @effect-diagnostics-next-line preferSchemaOverJson:off - writes fixed state fixtures to disk.
   const encodeState = (state: unknown) => `${JSON.stringify(state, null, 2)}\n`;
   for (const [name, state] of [
     [
