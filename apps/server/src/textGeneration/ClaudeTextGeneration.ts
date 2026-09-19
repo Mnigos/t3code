@@ -74,13 +74,19 @@ const ClaudeFailureMessage = Schema.Struct({ result: Schema.String });
 const isClaudeFailureMessage = Schema.is(ClaudeFailureMessage);
 const decodeClaudeFailureOutput = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
+const MAX_CLAUDE_FAILURE_RESULT_CHARS = 500;
+
 /** A failed `--output-format json` run still reports the reason on stdout,
-    while stderr may only hold notices from a wrapper around the binary. */
+    while stderr may only hold notices from a wrapper around the binary. The
+    result can embed a whole upstream response, so it is capped for the toast. */
 function claudeFailureResult(stdout: string): string | undefined {
   const output = Option.getOrUndefined(decodeClaudeFailureOutput(stdout));
   const message = Array.isArray(output) ? output.findLast(isClaudeFailureMessage) : output;
   const result = isClaudeFailureMessage(message) ? message.result.trim() : "";
-  return result.length > 0 ? result : undefined;
+  if (result.length === 0) return undefined;
+  return result.length > MAX_CLAUDE_FAILURE_RESULT_CHARS
+    ? `${result.slice(0, MAX_CLAUDE_FAILURE_RESULT_CHARS).trimEnd()}...`
+    : result;
 }
 
 export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(function* (

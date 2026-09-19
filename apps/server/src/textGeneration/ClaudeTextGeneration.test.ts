@@ -579,6 +579,11 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
       `Claude CLI command failed: ${apiError}`,
     ],
     [
+      "a capped stdout result",
+      { output: JSON.stringify({ is_error: true, result: `API Error: ${"x".repeat(600)}` }) },
+      `Claude CLI command failed: API Error: ${"x".repeat(489)}...`,
+    ],
+    [
       "stderr when stdout carries no result",
       { output: "not json", stderr: "claude: command crashed" },
       "Claude CLI command failed: claude: command crashed",
