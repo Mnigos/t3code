@@ -70,6 +70,19 @@ const decodeClaudeOutput = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Union([ClaudeOutputEnvelope, Schema.Array(ClaudeOutputMessage)])),
 );
 
+const ClaudeFailureMessage = Schema.Struct({ result: Schema.String });
+const isClaudeFailureMessage = Schema.is(ClaudeFailureMessage);
+const decodeClaudeFailureOutput = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+
+/** A failed `--output-format json` run still reports the reason on stdout,
+    while stderr may only hold notices from a wrapper around the binary. */
+function claudeFailureResult(stdout: string): string | undefined {
+  const output = Option.getOrUndefined(decodeClaudeFailureOutput(stdout));
+  const message = Array.isArray(output) ? output.findLast(isClaudeFailureMessage) : output;
+  const result = isClaudeFailureMessage(message) ? message.result.trim() : "";
+  return result.length > 0 ? result : undefined;
+}
+
 export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(function* (
   claudeSettings: ClaudeSettings,
   environment?: NodeJS.ProcessEnv,
@@ -252,7 +265,9 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       if (exitCode !== 0) {
         const stderrDetail = stderr.trim();
         const stdoutDetail = stdout.trim();
-        const detail = stderrDetail.length > 0 ? stderrDetail : stdoutDetail;
+        const detail =
+          claudeFailureResult(stdoutDetail) ??
+          (stderrDetail.length > 0 ? stderrDetail : stdoutDetail);
         return yield* new TextGenerationError({
           operation,
           detail:
