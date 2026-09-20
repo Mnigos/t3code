@@ -3248,7 +3248,7 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Paired devices on your network can run commands on this machine. Only share pairing links or codes with people you trust. T3 Code will restart."
+                    ? "Your paired devices can connect over the local network and run commands on this machine. Keep pairing links and codes private. T3 Code will restart."
                     : "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. T3 Code will restart."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
