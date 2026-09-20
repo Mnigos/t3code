@@ -296,6 +296,9 @@ export function SnapShotCoordinator() {
             item.id,
             resolveCaptureTarget,
           );
+          // Resolving can create a draft and take a while; the capture stays
+          // pending and unreported if the feature went off in the meantime.
+          if (!enabledRef.current) return;
           const target = capturedTarget
             ? resolveExistingSnapShotTarget(capturedTarget, routeThreadRef)
             : null;
@@ -374,13 +377,14 @@ export function SnapShotCoordinator() {
         case "started": {
           playCaptureSound(event.id);
           if (animateCaptures && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            // No drain would land an animation started after the feature went off.
             void beginSnapShotAnimationWhenReady(
               event.id,
               resolveSnapShotDeliveryTarget(
                 captureTargetsRef.current,
                 event.id,
                 resolveCaptureTarget,
-              ),
+              ).then((target) => (enabledRef.current ? target : null)),
               pendingAnimationStartsRef.current,
             );
           }
