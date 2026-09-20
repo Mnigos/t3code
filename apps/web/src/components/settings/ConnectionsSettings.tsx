@@ -3248,8 +3248,8 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Other devices on your network can pair with this environment, and anyone with a valid pairing credential can run commands here until it expires or is revoked. T3 Code will restart."
-                    : "This environment stops listening on your local network, so devices that paired over it will disconnect. Tunnels you have set up, such as T3 Connect or Tailscale HTTPS, keep their own access. T3 Code will restart."}
+                    ? "Allow devices on your network to connect with pairing credentials and run commands here. T3 Code will restart."
+                    : "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. T3 Code will restart."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3260,11 +3260,7 @@ export function ConnectionsSettings() {
                   Cancel
                 </AlertDialogClose>
                 <Button
-                  variant={
-                    pendingDesktopServerExposureMode === "network-accessible"
-                      ? "destructive"
-                      : "default"
-                  }
+                  variant="default"
                   onClick={handleConfirmDesktopServerExposureChange}
                   disabled={
                     pendingDesktopServerExposureMode === null || isUpdatingDesktopServerExposure
