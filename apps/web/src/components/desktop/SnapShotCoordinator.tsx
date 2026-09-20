@@ -91,6 +91,14 @@ export function dismissFailedSnapShot(
   }
 }
 
+/** True the first time a capture is found undeliverable, so a pending file
+    that keeps coming back on every drain is reported once, not on each pass. */
+export function shouldReportUndeliverableSnapShot(id: string, reportedIds: Set<string>): boolean {
+  if (reportedIds.has(id)) return false;
+  reportedIds.add(id);
+  return true;
+}
+
 export function resolveSnapShotTargetOnce(
   resolutionRef: { current: Promise<CaptureTarget | null> | null },
   resolveTarget: () => Promise<CaptureTarget | null>,
@@ -207,12 +215,14 @@ export function SnapShotCoordinator() {
     settings.snapShotPlaySound ? settings.snapShotSound : null,
   );
   const animateCaptures = useClientSettings((settings) => settings.snapShotAnimations);
+  const enabled = useClientSettings((settings) => settings.snapShotEnabled);
   const captureTargetsRef = useRef(new Map<string, Promise<CaptureTarget | null>>());
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const targetResolutionRef = useRef<Promise<CaptureTarget | null> | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
   const rerunRequestedRef = useRef(false);
   const soundedCaptureIdsRef = useRef(new Set<string>());
+  const undeliverableCaptureIdsRef = useRef(new Set<string>());
   const pendingAnimationStartsRef = useRef(new Set<string>());
 
   const currentTarget = routeThreadRef ?? routeDraftId;
@@ -258,6 +268,10 @@ export function SnapShotCoordinator() {
   );
 
   const drain = useCallback(async () => {
+    // Turning the feature off releases the shortcut in the main process, but
+    // captures taken before that stay pending. They wait for it to come back
+    // on instead of sounding and toasting while it is off.
+    if (!enabled) return;
     const bridge = getDesktopSnapShotBridge();
     if (!bridge) return;
     if (drainingRef.current) {
@@ -281,14 +295,17 @@ export function SnapShotCoordinator() {
             : null;
           if (!target) {
             await dismissSnapShotAnimation(item.id);
-            soundedCaptureIdsRef.current.delete(item.id);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Snapshot taken, but no project is available",
-                description: "Add a project, then capture the window again.",
-              }),
-            );
+            // The file stays pending and returns on the next drain, which runs
+            // on every focus and chat-state change.
+            if (shouldReportUndeliverableSnapShot(item.id, undeliverableCaptureIdsRef.current)) {
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Snapshot taken, but no project is available",
+                  description: "Add a project, then capture the window again.",
+                }),
+              );
+            }
             continue;
           }
 
@@ -296,6 +313,7 @@ export function SnapShotCoordinator() {
             await deliverSnapShot(bridge, item, target);
             captureTargetsRef.current.delete(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
+            undeliverableCaptureIdsRef.current.delete(item.id);
           } catch (error) {
             await dismissSnapShotAnimation(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
@@ -327,7 +345,7 @@ export function SnapShotCoordinator() {
       });
     drainingRef.current = operation;
     return operation;
-  }, [playCaptureSound, resolveCaptureTarget, routeThreadRef]);
+  }, [enabled, playCaptureSound, resolveCaptureTarget, routeThreadRef]);
 
   useEffect(() => {
     const bridge = getDesktopSnapShotBridge();
