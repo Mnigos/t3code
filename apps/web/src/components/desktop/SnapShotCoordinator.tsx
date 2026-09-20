@@ -216,6 +216,11 @@ export function SnapShotCoordinator() {
   );
   const animateCaptures = useClientSettings((settings) => settings.snapShotAnimations);
   const enabled = useClientSettings((settings) => settings.snapShotEnabled);
+  // Read by work that is already in flight when the setting flips.
+  const enabledRef = useRef(enabled);
+  useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
   const captureTargetsRef = useRef(new Map<string, Promise<CaptureTarget | null>>());
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const targetResolutionRef = useRef<Promise<CaptureTarget | null> | null>(null);
@@ -258,7 +263,7 @@ export function SnapShotCoordinator() {
 
   const playCaptureSound = useCallback(
     (id: string) => {
-      if (!captureSound || soundedCaptureIdsRef.current.has(id)) return;
+      if (!enabledRef.current || !captureSound || soundedCaptureIdsRef.current.has(id)) return;
       soundedCaptureIdsRef.current.add(id);
       try {
         playSnapShotSound(captureSound);
@@ -284,6 +289,7 @@ export function SnapShotCoordinator() {
         rerunRequestedRef.current = false;
         const pending = await bridge.listPendingSnapShots();
         for (const item of pending) {
+          if (!enabledRef.current) return;
           playCaptureSound(item.id);
           const capturedTarget = await resolveSnapShotDeliveryTarget(
             captureTargetsRef.current,
