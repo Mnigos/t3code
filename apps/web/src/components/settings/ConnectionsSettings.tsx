@@ -3248,7 +3248,7 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Allow devices on your network to connect with pairing credentials and run commands here. T3 Code will restart."
+                    ? "Paired devices on your network can run commands on this machine. Only share pairing links or codes with people you trust. T3 Code will restart."
                     : "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. T3 Code will restart."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -3257,7 +3257,7 @@ export function ConnectionsSettings() {
                   disabled={isUpdatingDesktopServerExposure}
                   render={<Button variant="outline" disabled={isUpdatingDesktopServerExposure} />}
                 >
-                  Cancel
+                  <span className="[text-box:trim-both_cap_alphabetic]">Cancel</span>
                 </AlertDialogClose>
                 <Button
                   variant="default"
@@ -3266,16 +3266,14 @@ export function ConnectionsSettings() {
                     pendingDesktopServerExposureMode === null || isUpdatingDesktopServerExposure
                   }
                 >
-                  {isUpdatingDesktopServerExposure ? (
-                    <>
-                      <Spinner className="size-3.5" />
-                      Restarting…
-                    </>
-                  ) : pendingDesktopServerExposureMode === "network-accessible" ? (
-                    "Restart and enable"
-                  ) : (
-                    "Restart and disable"
-                  )}
+                  {isUpdatingDesktopServerExposure && <Spinner className="size-3.5" />}
+                  <span className="[text-box:trim-both_cap_alphabetic]">
+                    {isUpdatingDesktopServerExposure
+                      ? "Restarting…"
+                      : pendingDesktopServerExposureMode === "network-accessible"
+                        ? "Restart and enable"
+                        : "Restart and disable"}
+                  </span>
                 </Button>
               </AlertDialogFooter>
             </AlertDialogPopup>
