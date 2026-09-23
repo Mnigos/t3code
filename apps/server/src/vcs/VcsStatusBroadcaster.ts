@@ -191,7 +191,10 @@ export class VcsStatusBroadcaster extends Context.Service<
     readonly refreshLocalStatus: (
       cwd: string,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
-    readonly refreshStatus: (cwd: string) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
+    readonly refreshStatus: (
+      cwd: string,
+      options?: StreamStatusOptions,
+    ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
     /**
      * Refresh a loaded cwd after a turn if background policy allows it.
      * GitManager retries missing PRs for the current branch and keeps known
@@ -485,8 +488,15 @@ export const make = Effect.gen(function* () {
 
   const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(
     "VcsStatusBroadcaster.refreshStatus",
-  )(function* (rawCwd) {
+  )(function* (rawCwd, options) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+    // A zero fetch interval is the user's promise that nothing fetches on its
+    // own, and a refresh runs on every window focus, so it reads the upstream
+    // the cache already has instead of fetching it.
+    const configuredInterval = yield* (
+      options?.automaticRemoteRefreshInterval ?? Effect.succeed(DEFAULT_VCS_STATUS_REFRESH_INTERVAL)
+    );
+    const refreshUpstream = !Duration.isZero(configuredInterval);
     // invalidateStatus (not the two partial invalidations) so an explicit
     // refresh also bypasses GitManager's slow PR-lookup cache.
     return yield* withRemoteWriteLock(
@@ -494,7 +504,7 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* workflow.invalidateStatus(cwd);
         // Local after remote: the fetch can move the base that the Changes totals compare with.
-        const remote = yield* workflow.remoteStatus({ cwd });
+        const remote = yield* workflow.remoteStatus({ cwd }, { refreshUpstream });
         const local = yield* workflow.localStatus({ cwd });
         const pulled = yield* maybeAutoPull(cwd, remote, [rawCwd]);
         if (pulled !== null) return mergeGitStatusParts(pulled.local, pulled.remote);
