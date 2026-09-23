@@ -494,7 +494,9 @@ export const make = Effect.gen(function* () {
           [workflow.localStatus({ cwd }), workflow.remoteStatus({ cwd }, { refreshUpstream })],
           { concurrency: "unbounded" },
         );
-        const pulled = yield* maybeAutoPull(cwd, remote, [rawCwd]);
+        // An automatic pull contacts the remote too, and without a fetch the
+        // "behind" count it would act on is stale anyway.
+        const pulled = refreshUpstream ? yield* maybeAutoPull(cwd, remote, [rawCwd]) : null;
         if (pulled !== null) return mergeGitStatusParts(pulled.local, pulled.remote);
         return yield* updateCachedStatus(cwd, local, remote, { publish: true });
       }),

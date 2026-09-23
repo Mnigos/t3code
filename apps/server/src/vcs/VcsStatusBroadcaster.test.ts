@@ -206,6 +206,56 @@ describe("VcsStatusBroadcaster", () => {
     },
   );
 
+  it.effect("does not pull automatically when periodic refreshes are disabled", () => {
+    let remoteStatus: VcsStatusRemoteResult = { ...baseRemoteStatus, behindCount: 2 };
+    let pullCalls = 0;
+    const localStatus: VcsStatusLocalResult = {
+      ...baseLocalStatus,
+      isDefaultRef: true,
+      refName: "main",
+    };
+    const testLayer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provideMerge(NodeServices.layer),
+      Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
+          isEnabled: () => Effect.succeed(true),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          localStatus: () => Effect.succeed(localStatus),
+          remoteStatus: () => Effect.succeed(remoteStatus),
+          invalidateLocalStatus: () => Effect.void,
+          invalidateRemoteStatus: () => Effect.void,
+          invalidateStatus: () => Effect.void,
+          pullCurrentBranch: () =>
+            Effect.sync(() => {
+              pullCalls += 1;
+              remoteStatus = { ...remoteStatus, behindCount: 0 };
+              return { status: "pulled" as const, refName: "main", upstreamRef: "origin/main" };
+            }),
+        }),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+
+      // The cached upstream still says "behind", but nothing fetched, so a
+      // focus refresh with the interval at 0 must not reach for the remote.
+      const quiet = yield* broadcaster.refreshStatus("/repo", {
+        automaticRemoteRefreshInterval: Effect.succeed(Duration.zero),
+      });
+      assert.equal(pullCalls, 0);
+      assert.equal(quiet.behindCount, 2);
+
+      const pulled = yield* broadcaster.refreshStatus("/repo");
+      assert.equal(pullCalls, 1);
+      assert.equal(pulled.behindCount, 0);
+    }).pipe(Effect.provide(testLayer));
+  });
+
   it.effect("reuses the cached VCS status across repeated reads", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
