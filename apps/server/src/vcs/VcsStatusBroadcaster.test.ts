@@ -588,6 +588,39 @@ describe("VcsStatusBroadcaster", () => {
     },
   );
 
+  it.effect(
+    "an explicit refresh reads the cached upstream when periodic refreshes are disabled",
+    () => {
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: remoteStatusWithPr,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        remoteStatusRefreshUpstreamValues: [] as Array<boolean | undefined>,
+      };
+
+      return Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+
+        // A window focus or a mobile thread selection with the interval at 0.
+        yield* broadcaster.refreshStatus("/repo", {
+          automaticRemoteRefreshInterval: Effect.succeed(Duration.zero),
+        });
+        assert.deepStrictEqual(state.remoteStatusRefreshUpstreamValues, [false]);
+        assert.equal(state.remoteInvalidationCalls, 1);
+
+        yield* broadcaster.refreshStatus("/repo", {
+          automaticRemoteRefreshInterval: Effect.succeed(Duration.minutes(1)),
+        });
+        yield* broadcaster.refreshStatus("/repo");
+        assert.deepStrictEqual(state.remoteStatusRefreshUpstreamValues, [false, true, true]);
+        assert.equal(state.remoteStatusCalls, 3);
+      }).pipe(Effect.provide(makeTestLayer(state)));
+    },
+  );
+
   it.effect("streams a local snapshot first and remote updates later", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
