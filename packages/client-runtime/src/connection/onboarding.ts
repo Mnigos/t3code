@@ -132,7 +132,7 @@ const registerPairingConnection = Effect.fn(
   // environment is turned on here, after the pair succeeded.
   yield* registry
     .setEnabled(registration.target.environmentId, true)
-    .pipe(Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void));
+    .pipe(Effect.catchTags({ EnvironmentNotRegisteredError: () => Effect.void }));
   return registration.target.environmentId;
 });
 

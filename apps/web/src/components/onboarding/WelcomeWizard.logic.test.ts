@@ -12,6 +12,17 @@ describe("resolveWizardEnvironmentStatus", () => {
     }
   });
 
+  it("shows the reason for an unsupported server instead of offering to turn it on", () => {
+    expect(
+      resolveWizardEnvironmentStatus({
+        enabled: false,
+        unsupportedReason: "server too old",
+        phase: "unsupported",
+        error: null,
+      }),
+    ).toEqual({ kind: "failed", text: "Not supported: server too old" });
+  });
+
   it("names the non-connected phases instead of showing them as connecting", () => {
     const status = (
       phase: Parameters<typeof resolveWizardEnvironmentStatus>[0]["phase"],
