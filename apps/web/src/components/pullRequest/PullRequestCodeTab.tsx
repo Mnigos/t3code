@@ -79,6 +79,7 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PendingReviewCommentCard, ReviewThreadCard } from "./PullRequestReviewAnnotation";
 import {
+  foldViewedFilesOnce,
   isFileDiffCollapsed,
   isLineInFileDiff,
   toggleFileDiffFoldForViewed,
@@ -223,6 +224,8 @@ function PullRequestCodeTab({
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
+  /** Files whose tick has been read once for this mount; see `foldViewedFilesOnce`. */
+  const seenViewedFilesRef = useRef<ReadonlySet<string>>(new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
   // than a choice. The rest arrive ten at a time, on request.
   const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
@@ -267,6 +270,7 @@ function PullRequestCodeTab({
     setDraft(null);
     setSelectedLines(null);
     setToggledFiles(new Set());
+    seenViewedFilesRef.current = new Set();
     setFoldOverride(null);
     setVisibleCommitCount(COMMIT_PAGE_SIZE);
     setOrphansOpen(false);
@@ -645,6 +649,31 @@ function PullRequestCodeTab({
       }),
     [],
   );
+
+  // The ticks outlive this tab, the folds do not: fold each already-ticked file once when it
+  // first shows up with the host's answer, as its tick would have, and leave the rest alone.
+  useEffect(() => {
+    if (!filesViewedEnabled || !filesViewed.ready) return;
+    const result = foldViewedFilesOnce(
+      annotatedFiles.map(({ fileKey, path }) => ({
+        fileKey,
+        viewed: isFileViewed(path) && !isFileViewedStale(path),
+      })),
+      seenViewedFilesRef.current,
+      effectiveFoldOverride,
+      toggledFiles,
+    );
+    seenViewedFilesRef.current = result.seenFileKeys;
+    if (result.toggledFileKeys !== toggledFiles) setToggledFiles(result.toggledFileKeys);
+  }, [
+    annotatedFiles,
+    effectiveFoldOverride,
+    filesViewed.ready,
+    filesViewedEnabled,
+    isFileViewed,
+    isFileViewedStale,
+    toggledFiles,
+  ]);
 
   // The tick and the fold are one gesture: clearing a file puts it away, un-clearing brings it
   // back. Folding is still held as the reader's difference from the toolbar's default rather

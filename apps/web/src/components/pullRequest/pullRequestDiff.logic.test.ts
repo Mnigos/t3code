@@ -2,6 +2,7 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  foldViewedFilesOnce,
   isFileDiffCollapsed,
   isLineInFileDiff,
   toggleFileDiffFoldForViewed,
@@ -81,6 +82,52 @@ describe("isFileDiffCollapsed", () => {
   it("still answers to a toggle after either toolbar press", () => {
     expect(isFileDiffCollapsed("a.ts", "expanded", new Set(["a.ts"]))).toBe(true);
     expect(isFileDiffCollapsed("a.ts", "folded", new Set(["a.ts"]))).toBe(false);
+  });
+});
+
+describe("foldViewedFilesOnce", () => {
+  const none: ReadonlySet<string> = new Set();
+
+  it("folds the files already ticked off, and only them, when the tab comes up expanded", () => {
+    const result = foldViewedFilesOnce(
+      [
+        { fileKey: "a", viewed: true },
+        { fileKey: "b", viewed: false },
+        { fileKey: "c", viewed: true },
+      ],
+      none,
+      "expanded",
+      none,
+    );
+    expect([...result.toggledFileKeys].sort()).toEqual(["a", "c"]);
+    expect([...result.seenFileKeys].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("changes no fold when the tab comes up folded", () => {
+    const result = foldViewedFilesOnce([{ fileKey: "a", viewed: true }], none, "folded", none);
+    expect(result.toggledFileKeys).toBe(none);
+    expect([...result.seenFileKeys]).toEqual(["a"]);
+  });
+
+  it("leaves a file it has already seen to the reader, even when it is ticked now", () => {
+    const seen: ReadonlySet<string> = new Set(["a"]);
+    const result = foldViewedFilesOnce([{ fileKey: "a", viewed: true }], seen, "expanded", none);
+    expect(result.toggledFileKeys).toBe(none);
+    expect(result.seenFileKeys).toBe(seen);
+  });
+
+  it("folds only the files that arrived since the last pass", () => {
+    const first = foldViewedFilesOnce([{ fileKey: "a", viewed: true }], none, "expanded", none);
+    const second = foldViewedFilesOnce(
+      [
+        { fileKey: "a", viewed: false },
+        { fileKey: "b", viewed: true },
+      ],
+      first.seenFileKeys,
+      "expanded",
+      first.toggledFileKeys,
+    );
+    expect([...second.toggledFileKeys].sort()).toEqual(["a", "b"]);
   });
 });
 
