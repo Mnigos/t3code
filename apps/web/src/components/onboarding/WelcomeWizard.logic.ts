@@ -9,13 +9,18 @@ export type WizardEnvironmentStatus =
 /**
  * Status shown next to a computer in the welcome wizard. A switched-off
  * environment never opens a socket, so it must not read as connecting; the
- * wizard offers to turn it on instead.
+ * wizard offers to turn it on instead. An unsupported server is kept off by
+ * the registry and cannot be turned on, so it shows the reason, not the action.
  */
 export function resolveWizardEnvironmentStatus(input: {
   readonly enabled: boolean;
+  readonly unsupportedReason?: string | undefined;
   readonly phase: EnvironmentConnectionPhase;
   readonly error: string | null;
 }): WizardEnvironmentStatus {
+  if (input.unsupportedReason !== undefined) {
+    return { kind: "failed", text: `Not supported: ${input.unsupportedReason}` };
+  }
   if (!input.enabled) return { kind: "off", text: "Off" };
   switch (input.phase) {
     case "connected":

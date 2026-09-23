@@ -313,6 +313,20 @@ function ConnectionStep({
   const setEnvironmentEnabled = useAtomCommand(environmentCatalog.setEnabled, {
     reportFailure: false,
   });
+  const [turnOnError, setTurnOnError] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly message: string;
+  } | null>(null);
+  const turnOn = async (environmentId: EnvironmentId) => {
+    setTurnOnError(null);
+    const result = await setEnvironmentEnabled({ environmentId, enabled: true });
+    if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+    const cause = squashAtomCommandFailure(result);
+    setTurnOnError({
+      environmentId,
+      message: cause instanceof Error ? cause.message : "Could not turn this computer on.",
+    });
+  };
   const ready =
     selectedIds.size > 0 &&
     [...selectedIds].every((id) =>
@@ -345,6 +359,7 @@ function ConnectionStep({
           {directEnvironments.map((environment) => {
             const status = resolveWizardEnvironmentStatus({
               enabled: environment.entry.enabled,
+              unsupportedReason: environment.entry.unsupportedReason,
               phase: environment.connection.phase,
               error: environment.connection.error,
             });
@@ -378,10 +393,7 @@ function ConnectionStep({
                           onClick={(event) => {
                             // Inside the row's label: keep the click from toggling the checkbox.
                             event.preventDefault();
-                            void setEnvironmentEnabled({
-                              environmentId: environment.environmentId,
-                              enabled: true,
-                            });
+                            void turnOn(environment.environmentId);
                           }}
                         >
                           Turn on
@@ -392,6 +404,11 @@ function ConnectionStep({
                   {environment.displayUrl ? (
                     <span className="mt-0.5 block text-xs break-all text-muted-foreground">
                       {environment.displayUrl}
+                    </span>
+                  ) : null}
+                  {turnOnError?.environmentId === environment.environmentId ? (
+                    <span role="alert" className="mt-1 block text-xs text-destructive">
+                      {turnOnError.message}
                     </span>
                   ) : null}
                 </span>
