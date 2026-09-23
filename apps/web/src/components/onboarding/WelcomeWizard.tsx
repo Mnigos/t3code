@@ -376,7 +376,8 @@ function ConnectionStep({
                       {environment.displayUrl}
                     </span>
                   ) : null}
-                  {turnOnError?.environmentId === environment.environmentId ? (
+                  {status.kind === "off" &&
+                  turnOnError?.environmentId === environment.environmentId ? (
                     <span role="alert" className="mt-1 block text-xs text-destructive">
                       {turnOnError.message}
                     </span>

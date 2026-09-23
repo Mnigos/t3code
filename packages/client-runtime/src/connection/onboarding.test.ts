@@ -136,6 +136,10 @@ describe("connection onboarding", () => {
         Effect.sync(() => {
           events.push(`register:${registration.target.environmentId}`);
         }),
+      setCompatibility: (environmentId: EnvironmentId, error: unknown) =>
+        Effect.sync(() => {
+          events.push(`setCompatibility:${environmentId}:${error === null ? "clear" : "set"}`);
+        }),
       setEnabled: (environmentId: EnvironmentId, enabled: boolean) =>
         Effect.sync(() => {
           events.push(`setEnabled:${environmentId}:${enabled}`);
@@ -151,8 +155,13 @@ describe("connection onboarding", () => {
       });
 
       expect(environmentId).toBe(EnvironmentId.make("environment-paired"));
-      // Registering keeps a previous entry's off flag; the pair turns it on after.
-      expect(events).toEqual(["register:environment-paired", "setEnabled:environment-paired:true"]);
+      // Registering keeps a previous entry's off flag and unsupported reason;
+      // the pair, having just checked the server, clears the reason and turns it on.
+      expect(events).toEqual([
+        "register:environment-paired",
+        "setCompatibility:environment-paired:clear",
+        "setEnabled:environment-paired:true",
+      ]);
     }).pipe(
       Effect.provide(
         onboardingLayer.pipe(
