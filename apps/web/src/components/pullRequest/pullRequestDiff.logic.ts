@@ -71,22 +71,27 @@ export function toggleFileDiffFoldForViewed(
  * is left to the reader's own choices; both sets come back unchanged when there is nothing to do.
  */
 export function foldViewedFilesOnce(
-  files: ReadonlyArray<{ readonly fileKey: string; readonly viewed: boolean }>,
-  seenFileKeys: ReadonlySet<string>,
+  files: ReadonlyArray<{
+    readonly fileKey: string;
+    /** Survives what `fileKey` does not, such as a whitespace toggle re-keying every diff. */
+    readonly path: string;
+    readonly viewed: boolean;
+  }>,
+  seenPaths: ReadonlySet<string>,
   foldOverride: DiffFoldOverride,
   toggledFileKeys: ReadonlySet<string>,
 ): {
-  readonly seenFileKeys: ReadonlySet<string>;
+  readonly seenPaths: ReadonlySet<string>;
   readonly toggledFileKeys: ReadonlySet<string>;
 } {
-  const unseen = files.filter((file) => !seenFileKeys.has(file.fileKey));
-  if (unseen.length === 0) return { seenFileKeys, toggledFileKeys };
-  const seen = new Set(seenFileKeys);
+  const unseen = files.filter((file) => !seenPaths.has(file.path));
+  if (unseen.length === 0) return { seenPaths, toggledFileKeys };
+  const seen = new Set(seenPaths);
   let toggled = toggledFileKeys;
   for (const file of unseen) {
-    seen.add(file.fileKey);
+    seen.add(file.path);
     if (file.viewed)
       toggled = toggleFileDiffFoldForViewed(file.fileKey, true, foldOverride, toggled);
   }
-  return { seenFileKeys: seen, toggledFileKeys: toggled };
+  return { seenPaths: seen, toggledFileKeys: toggled };
 }

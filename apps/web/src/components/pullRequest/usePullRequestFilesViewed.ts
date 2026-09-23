@@ -205,7 +205,7 @@ export function usePullRequestFilesViewed(options: {
       setViewed,
       viewedCount,
       truncated,
-      ready: states !== undefined,
+      ready: states !== null,
       error,
       refresh: refreshFromHost,
     }),

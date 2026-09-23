@@ -224,8 +224,8 @@ function PullRequestCodeTab({
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
-  /** Files whose tick has been read once for this mount; see `foldViewedFilesOnce`. */
-  const seenViewedFilesRef = useRef<ReadonlySet<string>>(new Set());
+  /** Paths whose tick has been read once for this mount; see `foldViewedFilesOnce`. */
+  const seenViewedPathsRef = useRef<ReadonlySet<string>>(new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
   // than a choice. The rest arrive ten at a time, on request.
   const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
@@ -270,7 +270,7 @@ function PullRequestCodeTab({
     setDraft(null);
     setSelectedLines(null);
     setToggledFiles(new Set());
-    seenViewedFilesRef.current = new Set();
+    seenViewedPathsRef.current = new Set();
     setFoldOverride(null);
     setVisibleCommitCount(COMMIT_PAGE_SIZE);
     setOrphansOpen(false);
@@ -657,13 +657,14 @@ function PullRequestCodeTab({
     const result = foldViewedFilesOnce(
       annotatedFiles.map(({ fileKey, path }) => ({
         fileKey,
+        path,
         viewed: isFileViewed(path) && !isFileViewedStale(path),
       })),
-      seenViewedFilesRef.current,
+      seenViewedPathsRef.current,
       effectiveFoldOverride,
       toggledFiles,
     );
-    seenViewedFilesRef.current = result.seenFileKeys;
+    seenViewedPathsRef.current = result.seenPaths;
     if (result.toggledFileKeys !== toggledFiles) setToggledFiles(result.toggledFileKeys);
   }, [
     annotatedFiles,
