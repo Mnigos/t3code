@@ -418,6 +418,7 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
             commentContext.onOpenChange(citeKey, open);
           },
           ...(commentTarget?.removeOnCancel ? { onCancel: onRemove } : {}),
+          draftKey: citeKey,
           onSave: onSaveComment,
           onSaveAndSend: (comment) => {
             if (!onSaveComment(comment)) return false;

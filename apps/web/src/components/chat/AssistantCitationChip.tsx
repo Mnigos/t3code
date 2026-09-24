@@ -46,6 +46,8 @@ export function AssistantCitationChip({
     onSaveAndSend?: (comment: string) => boolean;
     /** Returns focus to the host editor when the popover closes instead of to the pencil trigger. */
     onRestoreFocus?: () => void;
+    /** Tells two otherwise identical citations apart; the serialized citation is the fallback. */
+    draftKey?: string;
   };
 }) {
   const navigate = useNavigate();
@@ -60,7 +62,7 @@ export function AssistantCitationChip({
   // The draft outlives this chip (see assistantCitationCommentDrafts), so an
   // editor that comes back after the composer was borrowed for a question
   // resumes it, and the dismissal rules see it as typed.
-  const draftKey = serializeAssistantCitation(citation);
+  const draftKey = commentEditor?.draftKey ?? serializeAssistantCitation(citation);
   useEffect(() => {
     draftCommentRef.current = commentOpen ? readAssistantCitationCommentDraft(draftKey) : null;
   }, [commentOpen, draftKey]);
