@@ -7323,6 +7323,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPageScrollKeyUp={onPageScrollKeyUp}
                     onPageScrollRelease={onPageScrollRelease}
                     onCitationSubmitAndSend={submitCitationAndSend}
+                    citationDraftScope={composerTargetKey(composerDraftTarget)}
                     onPaste={onComposerPaste}
                     placeholder={
                       isComposerApprovalState

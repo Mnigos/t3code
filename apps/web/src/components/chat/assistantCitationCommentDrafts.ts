@@ -21,13 +21,15 @@ const drafts = new Map<string, string>();
 export function assistantCitationDraftKey(
   citation: AssistantCitation,
   citationsBefore: ReadonlyArray<AssistantCitation>,
+  /** The composer the draft belongs to, so another thread's composer never resumes it. */
+  scope = "",
 ): string {
   const serialized = serializeAssistantCitation(citation);
   let ordinal = 0;
   for (const earlier of citationsBefore) {
     if (serializeAssistantCitation(earlier) === serialized) ordinal += 1;
   }
-  return `${serialized}#${ordinal}`;
+  return `${scope}\n${serialized}#${ordinal}`;
 }
 
 export function readAssistantCitationCommentDraft(key: string): string | null {
