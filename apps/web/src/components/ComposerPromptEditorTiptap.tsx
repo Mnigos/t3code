@@ -142,6 +142,8 @@ export interface ComposerPromptEditorProps {
   onPageScrollKeyUp?: (key: string) => void;
   onPageScrollRelease?: () => void;
   onCitationSubmitAndSend?: () => void;
+  /** Keeps this composer's unsaved citation comments apart from another thread's. */
+  citationDraftScope?: string;
   onPaste: React.ClipboardEventHandler<HTMLElement>;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
 }
@@ -163,7 +165,8 @@ const ComposerCitationCommentContext = createContext<{
   openComment: OpenCitationComment | null;
   onOpenChange: (citeKey: string, open: boolean) => void;
   onSubmitAndSend: () => void;
-}>({ openComment: null, onOpenChange: () => {}, onSubmitAndSend: () => {} });
+  draftScope: string;
+}>({ openComment: null, onOpenChange: () => {}, onSubmitAndSend: () => {}, draftScope: "" });
 
 const RichComposerSkillsContext = createContext<ReadonlyArray<ServerProviderSkill>>([]);
 
@@ -344,8 +347,8 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
         }
       });
     }
-    return assistantCitationDraftKey(citation, citationsBefore);
-  }, [citation, editor.state.doc, getPos]);
+    return assistantCitationDraftKey(citation, citationsBefore, commentContext.draftScope);
+  }, [citation, commentContext.draftScope, editor.state.doc, getPos]);
   const commentTarget =
     commentContext.openComment?.key === citeKey ? commentContext.openComment : null;
 
@@ -618,6 +621,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     onPageScrollKeyUp,
     onPageScrollRelease,
     onCitationSubmitAndSend,
+    citationDraftScope,
     onPaste,
     editorRef,
   } = props;
@@ -699,8 +703,9 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
         });
       },
       onSubmitAndSend: onCitationSubmitAndSend ?? (() => {}),
+      draftScope: citationDraftScope ?? "",
     }),
-    [onCitationSubmitAndSend, openCitation],
+    [citationDraftScope, onCitationSubmitAndSend, openCitation],
   );
 
   const handleEditorChange = useCallback((updated: TiptapEditor) => {

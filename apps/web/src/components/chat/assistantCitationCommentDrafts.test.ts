@@ -31,4 +31,10 @@ describe("assistantCitationDraftKey", () => {
     // The same prompt rebuilt in the same order yields the same keys again.
     expect(assistantCitationDraftKey(citation, [citation])).toBe(second);
   });
+
+  it("keeps the same citation apart across composers", () => {
+    expect(assistantCitationDraftKey(citation, [], "thread-a")).not.toBe(
+      assistantCitationDraftKey(citation, [], "thread-b"),
+    );
+  });
 });
