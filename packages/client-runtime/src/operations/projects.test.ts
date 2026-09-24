@@ -83,16 +83,23 @@ describe("add project shared logic", () => {
         sshUrl: "ssh://git@forgejo.example.test:2222/owner/repo.git",
       }),
     ).toBe("https://forgejo.example.test:8443/owner/repo.git");
-  });
-
-  it("preserves existing clone transport behavior for other providers", () => {
     expect(
       getDefaultCloneUrl({
         provider: "gitlab",
         url: "https://gitlab.com/group/project.git",
         sshUrl: "git@gitlab.com:group/project.git",
       }),
-    ).toBe("git@gitlab.com:group/project.git");
+    ).toBe("https://gitlab.com/group/project.git");
+  });
+
+  it("preserves existing clone transport behavior for other providers", () => {
+    expect(
+      getDefaultCloneUrl({
+        provider: "bitbucket",
+        url: "https://bitbucket.org/workspace/repo.git",
+        sshUrl: "git@bitbucket.org:workspace/repo.git",
+      }),
+    ).toBe("git@bitbucket.org:workspace/repo.git");
   });
 
   it("derives the clone folder name from any pasted clone URL", () => {
