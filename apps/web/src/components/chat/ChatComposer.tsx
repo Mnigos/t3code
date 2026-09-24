@@ -2493,7 +2493,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ].slice(0, COMPOSER_PULL_REQUEST_RESULT_LIMIT);
       const projectRepository = pullRequestRepository.trim().toLowerCase();
       return matches.map((pullRequest) => ({
-        id: `pull-request:${pullRequest.projectId}:${pullRequest.repository}:${pullRequest.number}`,
+        id: `pull-request:${"host" in pullRequest ? pullRequest.host : ""}:${pullRequest.projectId}:${pullRequest.repository}:${pullRequest.number}`,
         type: "pull-request",
         pullRequest: {
           number: pullRequest.number,

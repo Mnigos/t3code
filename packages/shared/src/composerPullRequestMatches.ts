@@ -3,30 +3,53 @@ import type { ProjectId, ThreadPullRequestLink } from "@t3tools/contracts";
 export interface ComposerPullRequestMatch {
   readonly number: number;
   readonly projectId: string;
+  /**
+   * The host below which `repository` is addressed: the same `owner/repo` exists on two forges.
+   * Absent on a row the project's own lookup produced, which can only be on the project's host.
+   */
+  readonly host?: string;
   readonly repository: string;
   readonly updatedAt: string;
 }
 
 /** A pull request linked to the thread, which the composer offers from any repository. */
 export interface ComposerLinkedPullRequest {
+  readonly host: string;
   readonly repository: string;
   readonly number: number;
 }
 
-const normalizeRepository = (repository: string) => repository.trim().toLowerCase();
+type ComposerPullRequestIdentity = Pick<ComposerPullRequestMatch, "host" | "repository" | "number">;
 
-function isLinkedPullRequest(
-  entry: ComposerPullRequestMatch,
-  linked: ReadonlyArray<ComposerLinkedPullRequest>,
+const normalize = (value: string) => value.trim().toLowerCase();
+
+/**
+ * Whether two composer rows name the same pull request: the host-level identity a thread link
+ * carries, whatever the casing. A row without a host is the project's own, and matches either
+ * host rather than none.
+ */
+export function isSameComposerPullRequest(
+  left: ComposerPullRequestIdentity,
+  right: ComposerPullRequestIdentity,
 ): boolean {
-  const repository = normalizeRepository(entry.repository);
-  return linked.some(
-    (link) => link.number === entry.number && normalizeRepository(link.repository) === repository,
+  return (
+    left.number === right.number &&
+    normalize(left.repository) === normalize(right.repository) &&
+    (left.host === undefined ||
+      right.host === undefined ||
+      normalize(left.host) === normalize(right.host))
   );
 }
 
+function isLinkedPullRequest(
+  entry: ComposerPullRequestIdentity,
+  linked: ReadonlyArray<ComposerLinkedPullRequest>,
+): boolean {
+  return linked.some((link) => isSameComposerPullRequest(link, entry));
+}
+
 /**
- * Pull requests matching the numeric fragment typed after `#`, de-duplicated per repository. A
+ * Pull requests matching the numeric fragment typed after `#`, de-duplicated per pull request. A
  * pull request linked to the thread outranks the project's own, so `#4` offers the thread's
  * `owner/other#4` before an unrelated `#4` in the project's repository. Below that an exact
  * number match outranks a substring match so the result limit can never drop the pull request
@@ -41,26 +64,24 @@ export function filterComposerPullRequestMatches<Entry extends ComposerPullReque
   /** Linked to the thread: matched from any repository and suggested first. */
   readonly linked?: ReadonlyArray<ComposerLinkedPullRequest>;
 }): ReadonlyArray<Entry> {
-  const repository = normalizeRepository(input.repository);
+  const repository = normalize(input.repository);
   const linked = input.linked ?? [];
-  const matchingEntries = input.entries.filter(
-    (entry) =>
-      entry.projectId === input.projectId &&
-      (normalizeRepository(entry.repository) === repository ||
-        isLinkedPullRequest(entry, linked)) &&
-      String(entry.number).includes(input.query),
-  );
-  const uniqueEntries = new Map<string, Entry>();
-  for (const entry of matchingEntries) {
-    const key = `${normalizeRepository(entry.repository)}#${entry.number}`;
-    if (!uniqueEntries.has(key)) {
-      uniqueEntries.set(key, entry);
+  const uniqueEntries: Array<Entry> = [];
+  for (const entry of input.entries) {
+    if (
+      entry.projectId !== input.projectId ||
+      !(normalize(entry.repository) === repository || isLinkedPullRequest(entry, linked)) ||
+      !String(entry.number).includes(input.query) ||
+      uniqueEntries.some((kept) => isSameComposerPullRequest(kept, entry))
+    ) {
+      continue;
     }
+    uniqueEntries.push(entry);
   }
   const isExactMatch = (entry: Entry) => String(entry.number) === input.query;
   // `.sort()` on a copy, not `.toSorted()`: this runs on Hermes, which has no ES2023 array
   // methods, and reaching for one here crashed the composer as the suggestions loaded.
-  return [...uniqueEntries.values()]
+  return [...uniqueEntries]
     .sort((left, right) => {
       const linkage =
         Number(isLinkedPullRequest(right, linked)) - Number(isLinkedPullRequest(left, linked));
@@ -98,8 +119,8 @@ export function composerPullRequestEntriesFromLinks(
     entries.push({
       number: link.number,
       projectId,
-      repository: link.repository,
       host: link.host,
+      repository: link.repository,
       title: link.snapshot.title,
       url: link.url,
       headBranch: link.snapshot.headBranch,
@@ -124,15 +145,4 @@ export function matchesComposerPullRequestWords(
     .split(/\s+/u)
     .filter(Boolean)
     .every((word) => haystack.includes(word));
-}
-
-/** Whether two composer rows name the same pull request, whatever the repository's casing. */
-export function isSameComposerPullRequest(
-  left: Pick<ComposerPullRequestMatch, "repository" | "number">,
-  right: Pick<ComposerPullRequestMatch, "repository" | "number">,
-): boolean {
-  return (
-    left.number === right.number &&
-    normalizeRepository(left.repository) === normalizeRepository(right.repository)
-  );
 }

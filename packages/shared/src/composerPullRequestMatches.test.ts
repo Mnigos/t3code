@@ -10,6 +10,7 @@ import {
 const entry = (number: number, updatedAt: string) => ({
   number,
   projectId: "p1",
+  host: "github.com",
   repository: "owner/repo",
   updatedAt,
 });
@@ -44,6 +45,7 @@ describe("filterComposerPullRequestMatches", () => {
     const linked = {
       number: 4,
       projectId: "p1",
+      host: "github.com",
       repository: "owner/other",
       updatedAt: "2026-01-01",
     };
@@ -53,7 +55,7 @@ describe("filterComposerPullRequestMatches", () => {
       repository: "owner/repo",
       query: "4",
       limit: 10,
-      linked: [{ repository: "Owner/Other", number: 4 }],
+      linked: [{ host: "GitHub.com", repository: "Owner/Other", number: 4 }],
     });
     expect(result.map((match) => `${match.repository}#${match.number}`)).toEqual([
       "owner/other#4",
@@ -64,12 +66,20 @@ describe("filterComposerPullRequestMatches", () => {
 
   it("leaves other repositories out unless the thread links them", () => {
     const result = filterComposerPullRequestMatches({
-      entries: [{ number: 4, projectId: "p1", repository: "owner/other", updatedAt: "2026-01-01" }],
+      entries: [
+        {
+          number: 4,
+          projectId: "p1",
+          host: "github.com",
+          repository: "owner/other",
+          updatedAt: "2026-01-01",
+        },
+      ],
       projectId: "p1",
       repository: "owner/repo",
       query: "4",
       limit: 10,
-      linked: [{ repository: "owner/other", number: 5 }],
+      linked: [{ host: "github.com", repository: "owner/other", number: 5 }],
     });
     expect(result).toHaveLength(0);
   });
@@ -89,6 +99,7 @@ describe("filterComposerPullRequestMatches", () => {
     const other = {
       number: 7,
       projectId: "p1",
+      host: "github.com",
       repository: "owner/other",
       updatedAt: "2026-01-01",
     };
@@ -101,6 +112,33 @@ describe("filterComposerPullRequestMatches", () => {
       linked: [other],
     });
     expect(result).toHaveLength(2);
+  });
+
+  it("folds the project's own hostless lookup row into the listed one", () => {
+    const { host: _host, ...fromDetailLookup } = entry(4, "2026-01-01");
+    const result = filterComposerPullRequestMatches({
+      entries: [fromDetailLookup, entry(4, "2026-01-02")],
+      projectId: "p1",
+      repository: "owner/repo",
+      query: "4",
+      limit: 10,
+    });
+    expect(result).toHaveLength(1);
+  });
+
+  it("tells the same repository apart across hosts", () => {
+    // A thread can link owner/repo#4 on github.com and on a GitLab install at once; the link
+    // identity is host-level, so neither row may stand in for the other.
+    const onGitLab = { ...entry(4, "2026-01-01"), host: "gitlab.example.com" };
+    const result = filterComposerPullRequestMatches({
+      entries: [entry(4, "2026-01-02"), onGitLab],
+      projectId: "p1",
+      repository: "owner/repo",
+      query: "4",
+      limit: 10,
+      linked: [onGitLab],
+    });
+    expect(result.map((match) => match.host)).toEqual(["gitlab.example.com", "github.com"]);
   });
 });
 
