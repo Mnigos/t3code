@@ -107,6 +107,12 @@ describe("providerAccentForegroundColor", () => {
     expect(providerAccentForegroundColor("#fde68a")).toBe("#0a0a0a");
   });
 
+  it("switches to dark text on bright mid-tones where white would not pass", () => {
+    // #ff8000 gives white text 2.5:1 and dark text 7.9:1; teal is the same case.
+    expect(providerAccentForegroundColor("#ff8000")).toBe("#0a0a0a");
+    expect(providerAccentForegroundColor("#14b8a6")).toBe("#0a0a0a");
+  });
+
   it("expands a short hex accent", () => {
     expect(providerAccentForegroundColor("#fff")).toBe("#0a0a0a");
     expect(providerAccentForegroundColor("#000")).toBe("#ffffff");
