@@ -74,8 +74,10 @@ export function normalizeProviderAccentColor(value: string | undefined): string 
  * Text color that stays readable on an accent badge: white on dark and
  * saturated accents, near-black on light ones such as white or pastel picks.
  * The threshold sits above the WCAG midpoint so mid-tones like Claude's
- * orange keep the white text users already see. Accepts `#rgb` and `#rrggbb`;
- * anything else keeps the historical white.
+ * orange (luminance 0.29) keep the white text users already see, and below
+ * the brighter mid-tones such as `#ff8000` or teal (0.36 and up), where dark
+ * text already triples the contrast. Accepts `#rgb` and `#rrggbb`; anything
+ * else keeps the historical white.
  */
 export function providerAccentForegroundColor(accentColor: string): "#ffffff" | "#0a0a0a" {
   const hex = accentColor.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/iu)?.[1];
@@ -92,7 +94,7 @@ export function providerAccentForegroundColor(accentColor: string): "#ffffff" | 
     0.2126 * linearize((numeric >> 16) & 255) +
     0.7152 * linearize((numeric >> 8) & 255) +
     0.0722 * linearize(numeric & 255);
-  return luminance > 0.4 ? "#0a0a0a" : "#ffffff";
+  return luminance > 0.33 ? "#0a0a0a" : "#ffffff";
 }
 
 /**
