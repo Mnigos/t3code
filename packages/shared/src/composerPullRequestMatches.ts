@@ -29,7 +29,7 @@ const normalize = (value: string) => value.trim().toLowerCase();
  * carries, whatever the casing. A row still without a host only matches another such row, so a
  * lookup row can never stand in for a linked pull request on a different host.
  */
-export function isSameComposerPullRequest(
+function isSameComposerPullRequest(
   left: ComposerPullRequestIdentity,
   right: ComposerPullRequestIdentity,
 ): boolean {
