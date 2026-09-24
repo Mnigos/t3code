@@ -41,16 +41,28 @@ export function isSameComposerPullRequest(
 }
 
 /**
- * The host of the project's own repository, as the rows already on hand know it: the listing
- * and the thread's links carry one, the exact lookup (`PullRequestDetail`) does not. Absent when
- * no row names that repository yet.
+ * The host of the project's own repository, as the project's listing knows it; the exact lookup
+ * (`PullRequestDetail`) carries none. Only rows the project produced may answer: a thread link
+ * naming the same `owner/repo` may live on another forge. Absent while the listing is empty.
  */
 export function composerProjectPullRequestHost(
-  rows: ReadonlyArray<ComposerPullRequestMatch>,
+  listing: ReadonlyArray<ComposerPullRequestMatch>,
   repository: string,
 ): string | undefined {
   const target = normalize(repository);
-  return rows.find((row) => row.host !== undefined && normalize(row.repository) === target)?.host;
+  return listing.find((row) => row.host !== undefined && normalize(row.repository) === target)
+    ?.host;
+}
+
+/** The rows with each pull request once, keeping the first row that names it. */
+export function uniqueComposerPullRequests<Entry extends ComposerPullRequestMatch>(
+  rows: ReadonlyArray<Entry>,
+): ReadonlyArray<Entry> {
+  const unique: Array<Entry> = [];
+  for (const row of rows) {
+    if (!unique.some((kept) => isSameComposerPullRequest(kept, row))) unique.push(row);
+  }
+  return unique;
 }
 
 function isLinkedPullRequest(
