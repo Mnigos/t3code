@@ -127,11 +127,21 @@ export function useComposerPullRequestSearch(input: {
   );
   const number = numeric && query ? Number(query) : null;
   // A linked row for the project's own repository already answers the typed number, so the
-  // exact lookup, which would return the same pull request without a host, is not needed.
-  const hasExact = [...(list.data?.entries ?? []), ...linkedEntries].some(
-    (entry) =>
-      entry.number === number && entry.repository.toLowerCase() === input.repository?.toLowerCase(),
+  // exact lookup, which would return the same pull request without a host, is not needed. Only
+  // a link on the project's host counts, as the listing knows it: the same name elsewhere is
+  // another pull request.
+  const projectHost = composerProjectPullRequestHost(
+    list.data?.entries ?? [],
+    input.repository ?? "",
   );
+  const isProjectNumber = (entry: { repository: string; number: number }) =>
+    entry.number === number && entry.repository.toLowerCase() === input.repository?.toLowerCase();
+  const hasExact =
+    list.data?.entries.some(isProjectNumber) === true ||
+    (projectHost !== undefined &&
+      linkedEntries.some(
+        (entry) => isProjectNumber(entry) && entry.host.toLowerCase() === projectHost.toLowerCase(),
+      ));
   const exact = useEnvironmentQuery(
     ready && number !== null && Number.isSafeInteger(number) && number > 0 && !hasExact
       ? composerPullRequests.detail({

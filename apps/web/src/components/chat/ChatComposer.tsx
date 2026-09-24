@@ -2330,15 +2330,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [pullRequestLinks, pullRequestProjectId],
   );
   // A linked row for the project's own repository already answers the typed number, so the
-  // exact lookup, which would return the same pull request without a host, is not needed.
+  // exact lookup, which would return the same pull request without a host, is not needed. Only
+  // a link on the project's host counts, as the listing knows it: the same name elsewhere is
+  // another pull request.
   const recentHasExactPullRequest =
     settledPullRequestNumber !== null &&
-    [...(pullRequestLookup.data?.entries ?? []), ...linkedPullRequestEntries].some(
-      (entry) =>
+    (() => {
+      const listed = pullRequestLookup.data?.entries ?? [];
+      const projectHost = composerProjectPullRequestHost(listed, pullRequestRepository ?? "");
+      const isProjectRow = (entry: { projectId: string; repository: string; number: number }) =>
         entry.projectId === pullRequestProjectId &&
         entry.repository.trim().toLowerCase() === pullRequestRepository?.trim().toLowerCase() &&
-        entry.number === settledPullRequestNumber,
-    );
+        entry.number === settledPullRequestNumber;
+      return (
+        listed.some(isProjectRow) ||
+        (projectHost !== undefined &&
+          linkedPullRequestEntries.some(
+            (entry) =>
+              isProjectRow(entry) &&
+              entry.host.trim().toLowerCase() === projectHost.trim().toLowerCase(),
+          ))
+      );
+    })();
   const exactPullRequestLookup = useEnvironmentQuery(
     settledPullRequestNumber === null ||
       pullRequestProjectId === null ||
