@@ -86,10 +86,11 @@ describe("add project shared logic", () => {
     expect(
       getDefaultCloneUrl({
         provider: "gitlab",
-        url: "https://gitlab.com/group/project.git",
+        // The lookup returns GitLab's web_url here, which git clones as well.
+        url: "https://gitlab.com/group/project",
         sshUrl: "git@gitlab.com:group/project.git",
       }),
-    ).toBe("https://gitlab.com/group/project.git");
+    ).toBe("https://gitlab.com/group/project");
   });
 
   it("preserves existing clone transport behavior for other providers", () => {
