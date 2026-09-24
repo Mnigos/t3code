@@ -5,7 +5,12 @@ import { runtimeModeConfig, runtimeModeOptions } from "./runtimeModeConfig";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { AttachmentFilePreview } from "../files/AttachmentFilePreview";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
-import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
+import {
+  composerPullRequestEntriesFromLinks,
+  filterComposerPullRequestMatches,
+  isSameComposerPullRequest,
+  matchesComposerPullRequestWords,
+} from "@t3tools/shared/composerPullRequestMatches";
 import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
 import { elementContextToPreviewAnnotation } from "../../lib/elementContext";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -32,6 +37,7 @@ import type {
   ScopedThreadRef,
   ServerProvider,
   ThreadId,
+  ThreadPullRequestLink,
   SnapShotSource,
 } from "@t3tools/contracts";
 import {
@@ -1414,6 +1420,8 @@ export interface ChatComposerProps {
   gitCwd: string | null;
   pullRequestProjectId: ProjectId | null;
   pullRequestRepository: string | null;
+  /** Linked to the thread, so `#` can reach a pull request it opened in another repository. */
+  pullRequestLinks: ReadonlyArray<ThreadPullRequestLink>;
   restingControlsHost: HTMLDivElement | null;
   restingControlsHaveLeadingContext: boolean;
   onRestingControlsVisibilityChange: (visible: boolean) => void;
@@ -1539,6 +1547,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     gitCwd,
     pullRequestProjectId,
     pullRequestRepository,
+    pullRequestLinks,
     restingControlsHost,
     restingControlsHaveLeadingContext,
     onRestingControlsVisibilityChange,
@@ -2336,6 +2345,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }),
   );
 
+  const linkedPullRequestEntries = useMemo(
+    () =>
+      pullRequestProjectId === null
+        ? []
+        : composerPullRequestEntriesFromLinks(pullRequestLinks, pullRequestProjectId),
+    [pullRequestLinks, pullRequestProjectId],
+  );
+
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
@@ -2434,32 +2451,47 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         exactPullRequestLookup.data?.number === pullRequestTriggerNumber
           ? [exactPullRequestLookup.data]
           : [];
+      // The thread's own links come last so a fresher listing row wins the de-duplication, and
+      // first in the text search, where they are the pull requests the thread is about.
       const matches = /^\d*$/u.test(composerTrigger.query)
         ? filterComposerPullRequestMatches({
-            entries: [...exactPullRequest, ...(pullRequestLookup.data?.entries ?? [])],
+            entries: [
+              ...exactPullRequest,
+              ...(pullRequestLookup.data?.entries ?? []),
+              ...linkedPullRequestEntries,
+            ],
             projectId: pullRequestProjectId,
             repository: pullRequestRepository,
             query: composerTrigger.query,
             limit: COMPOSER_PULL_REQUEST_RESULT_LIMIT,
+            linked: linkedPullRequestEntries,
           })
-        : rankPullRequestMatches(
-            (pullRequestLookup.data?.entries ?? []).filter((entry) => {
-              if (
-                entry.projectId !== pullRequestProjectId ||
-                entry.repository.trim().toLowerCase() !== pullRequestRepository.trim().toLowerCase()
-              ) {
-                return false;
-              }
-              const provider = pullRequestLookup.data?.providers.find(
-                (candidate) => candidate.host === entry.host,
-              );
-              return (
-                provider?.searchesOnHost === true ||
-                matchesPullRequestQuery(entry, composerTrigger.query)
-              );
-            }),
-            composerTrigger.query,
-          ).slice(0, COMPOSER_PULL_REQUEST_RESULT_LIMIT);
+        : [
+            ...linkedPullRequestEntries.filter((entry) =>
+              matchesComposerPullRequestWords(entry, composerTrigger.query),
+            ),
+            ...rankPullRequestMatches(
+              (pullRequestLookup.data?.entries ?? []).filter((entry) => {
+                if (
+                  entry.projectId !== pullRequestProjectId ||
+                  entry.repository.trim().toLowerCase() !==
+                    pullRequestRepository.trim().toLowerCase() ||
+                  linkedPullRequestEntries.some((link) => isSameComposerPullRequest(link, entry))
+                ) {
+                  return false;
+                }
+                const provider = pullRequestLookup.data?.providers.find(
+                  (candidate) => candidate.host === entry.host,
+                );
+                return (
+                  provider?.searchesOnHost === true ||
+                  matchesPullRequestQuery(entry, composerTrigger.query)
+                );
+              }),
+              composerTrigger.query,
+            ),
+          ].slice(0, COMPOSER_PULL_REQUEST_RESULT_LIMIT);
+      const projectRepository = pullRequestRepository.trim().toLowerCase();
       return matches.map((pullRequest) => ({
         id: `pull-request:${pullRequest.projectId}:${pullRequest.repository}:${pullRequest.number}`,
         type: "pull-request",
@@ -2473,7 +2505,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           isDraft: pullRequest.isDraft,
         },
         label: `#${pullRequest.number}`,
-        description: pullRequest.title,
+        description:
+          pullRequest.repository.trim().toLowerCase() === projectRepository
+            ? pullRequest.title
+            : `${pullRequest.repository} · ${pullRequest.title}`,
       }));
     }
     return [];
@@ -2481,6 +2516,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     compactSlashCommandAvailable,
     composerTrigger,
     exactPullRequestLookup.data,
+    linkedPullRequestEntries,
     planModeUiEnabled,
     pullRequestLookup.data,
     pullRequestProjectId,

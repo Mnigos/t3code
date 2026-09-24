@@ -1,10 +1,16 @@
-import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
+import {
+  composerPullRequestEntriesFromLinks,
+  filterComposerPullRequestMatches,
+  isSameComposerPullRequest,
+  matchesComposerPullRequestWords,
+} from "@t3tools/shared/composerPullRequestMatches";
 import type { VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
   ProjectId,
   OrchestrationThread,
   ThreadId,
+  ThreadPullRequestLink,
   VcsListRefsResult,
   VcsRef,
 } from "@t3tools/contracts";
@@ -81,13 +87,23 @@ export function useDebouncedValue<A>(value: A, delayMs: number): A {
   return debounced;
 }
 
+const EMPTY_PULL_REQUEST_LINKS: ReadonlyArray<ThreadPullRequestLink> = [];
+
 export function useComposerPullRequestSearch(input: {
   environmentId: EnvironmentId | null;
   projectId: ProjectId | null;
   repository: string | null;
   query: string | null;
+  /** Linked to the thread, so `#` can reach a pull request it opened in another repository. */
+  links?: ReadonlyArray<ThreadPullRequestLink>;
 }) {
   const query = useDebouncedValue(input.query, 180);
+  const links = input.links ?? EMPTY_PULL_REQUEST_LINKS;
+  const linkedEntries = useMemo(
+    () =>
+      input.projectId === null ? [] : composerPullRequestEntriesFromLinks(links, input.projectId),
+    [input.projectId, links],
+  );
   const ready =
     query === input.query &&
     query !== null &&
@@ -125,11 +141,16 @@ export function useComposerPullRequestSearch(input: {
     if (!ready) return [];
     if (numeric) {
       return filterComposerPullRequestMatches({
-        entries: [...(exact.data ? [exact.data] : []), ...(list.data?.entries ?? [])],
+        entries: [
+          ...(exact.data ? [exact.data] : []),
+          ...(list.data?.entries ?? []),
+          ...linkedEntries,
+        ],
         projectId: input.projectId!,
         repository: input.repository!,
         query: query ?? "",
         limit: 20,
+        linked: linkedEntries,
       });
     }
     const words = (query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
@@ -137,16 +158,28 @@ export function useComposerPullRequestSearch(input: {
       (entry) =>
         entry.projectId === input.projectId &&
         entry.repository.toLowerCase() === input.repository?.toLowerCase() &&
+        !linkedEntries.some((link) => isSameComposerPullRequest(link, entry)) &&
         words.every((word) =>
           `${entry.title} ${entry.headBranch} ${entry.baseBranch}`.toLowerCase().includes(word),
         ),
     );
     const unique = new Map<number, (typeof found)[number]>();
     for (const entry of found) if (!unique.has(entry.number)) unique.set(entry.number, entry);
-    return [...unique.values()]
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .slice(0, 20);
-  }, [ready, exact.data, list.data, input.projectId, input.repository, numeric, query]);
+    // The thread's own links lead the text search: they are the pull requests the thread is about.
+    return [
+      ...linkedEntries.filter((entry) => matchesComposerPullRequestWords(entry, query ?? "")),
+      ...[...unique.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    ].slice(0, 20);
+  }, [
+    ready,
+    exact.data,
+    list.data,
+    linkedEntries,
+    input.projectId,
+    input.repository,
+    numeric,
+    query,
+  ]);
   return {
     entries,
     isPending: input.query !== null && (query !== input.query || list.isPending || exact.isPending),
