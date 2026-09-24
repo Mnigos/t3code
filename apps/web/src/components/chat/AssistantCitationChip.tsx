@@ -46,7 +46,7 @@ export function AssistantCitationChip({
     onSaveAndSend?: (comment: string) => boolean;
     /** Returns focus to the host editor when the popover closes instead of to the pencil trigger. */
     onRestoreFocus?: () => void;
-    /** Tells two otherwise identical citations apart; the serialized citation is the fallback. */
+    /** Where the unsaved comment is kept across a remount; the serialized citation is the fallback. */
     draftKey?: string;
   };
 }) {
