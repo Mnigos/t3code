@@ -5,6 +5,7 @@ import type { ProjectId, ThreadPullRequestLink } from "@t3tools/contracts";
 import {
   composerPullRequestEntriesFromLinks,
   filterComposerPullRequestMatches,
+  matchesComposerPullRequestWords,
 } from "./composerPullRequestMatches.ts";
 
 const entry = (number: number, updatedAt: string) => ({
@@ -139,6 +140,20 @@ describe("filterComposerPullRequestMatches", () => {
       linked: [onGitLab],
     });
     expect(result.map((match) => match.host)).toEqual(["gitlab.example.com", "github.com"]);
+  });
+});
+
+describe("matchesComposerPullRequestWords", () => {
+  it("finds a linked pull request by its repository as well as its title", () => {
+    const row = {
+      number: 4,
+      title: "Add thing",
+      repository: "owner/other",
+      headBranch: "feat",
+      baseBranch: "main",
+    };
+    expect(matchesComposerPullRequestWords(row, "other thing")).toBe(true);
+    expect(matchesComposerPullRequestWords(row, "elsewhere")).toBe(false);
   });
 });
 
