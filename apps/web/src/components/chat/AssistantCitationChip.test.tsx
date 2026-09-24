@@ -101,6 +101,41 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("citation comment draft across a remount", () => {
+  it("resumes an unsaved comment when the chip is mounted again", () => {
+    // The composer editor replaces its document when a provider question
+    // borrows it, which unmounts the node view without any dismissal.
+    mount();
+    typeComment("still typing");
+    act(() => renderer.unmount());
+
+    const onSave = mount();
+    expect(renderer.root.findByType("textarea").props.value).toBe("still typing");
+    clickButton("Save");
+    expect(onSave).toHaveBeenCalledWith("still typing");
+  });
+
+  it("forgets the draft once it was saved", () => {
+    mount();
+    typeComment("saved now");
+    clickButton("Save");
+    act(() => renderer.unmount());
+
+    mount();
+    expect(renderer.root.findByType("textarea").props.value).toBe("");
+  });
+
+  it("forgets the draft once it was cancelled", () => {
+    mount();
+    typeComment("never mind");
+    clickButton("Cancel");
+    act(() => renderer.unmount());
+
+    mount();
+    expect(renderer.root.findByType("textarea").props.value).toBe("");
+  });
+});
+
 describe("citation comment source disappearance", () => {
   it("preserves an over-length draft at the composer until it can be shortened and saved", () => {
     const onSave = mount();
