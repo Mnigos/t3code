@@ -133,13 +133,19 @@ export function composerPullRequestEntriesFromLinks(
   return entries;
 }
 
-/** Whether every word of a text query appears in the pull request's number, title or branches. */
+/**
+ * Whether every word of a text query appears in the pull request's number, title, repository or
+ * branches; the repository is what tells a linked row from another repository apart in the menu.
+ */
 export function matchesComposerPullRequestWords(
-  entry: Pick<ComposerLinkedPullRequestEntry, "number" | "title" | "headBranch" | "baseBranch">,
+  entry: Pick<
+    ComposerLinkedPullRequestEntry,
+    "number" | "title" | "repository" | "headBranch" | "baseBranch"
+  >,
   query: string,
 ): boolean {
   const haystack =
-    `#${entry.number} ${entry.title} ${entry.headBranch} ${entry.baseBranch}`.toLowerCase();
+    `#${entry.number} ${entry.title} ${entry.repository} ${entry.headBranch} ${entry.baseBranch}`.toLowerCase();
   return query
     .toLowerCase()
     .split(/\s+/u)
