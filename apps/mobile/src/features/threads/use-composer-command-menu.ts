@@ -318,7 +318,7 @@ export function useComposerCommandMenu({
 
     if (trigger.kind === "pull-request") {
       return pullRequestSearch.entries.map((entry) => ({
-        id: `pr:${"host" in entry ? entry.host : ""}:${entry.projectId}:${entry.repository}:${entry.number}`,
+        id: `pr:${entry.host ?? ""}:${entry.projectId}:${entry.repository}:${entry.number}`,
         type: "pull-request",
         pullRequest: {
           number: entry.number,

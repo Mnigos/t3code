@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ProjectId, ThreadPullRequestLink } from "@t3tools/contracts";
 
 import {
+  type ComposerPullRequestMatch,
+  composerProjectPullRequestHost,
   composerPullRequestEntriesFromLinks,
   filterComposerPullRequestMatches,
   matchesComposerPullRequestWords,
@@ -115,10 +117,32 @@ describe("filterComposerPullRequestMatches", () => {
     expect(result).toHaveLength(2);
   });
 
-  it("folds the project's own hostless lookup row into the listed one", () => {
-    const { host: _host, ...fromDetailLookup } = entry(4, "2026-01-01");
+  it("keeps a hostless lookup row apart from a linked pull request on another host", () => {
+    // The exact lookup returns no host. Before the project host is known it must not fold a
+    // linked owner/repo#4 on GitLab into itself and take its place.
+    const { host: _host, ...hostless } = entry(4, "2026-01-01");
+    const fromDetailLookup: ComposerPullRequestMatch = hostless;
+    const onGitLab = { ...entry(4, "2026-01-01"), host: "gitlab.example.com" };
     const result = filterComposerPullRequestMatches({
-      entries: [fromDetailLookup, entry(4, "2026-01-02")],
+      entries: [fromDetailLookup, onGitLab],
+      projectId: "p1",
+      repository: "owner/repo",
+      query: "4",
+      limit: 10,
+      linked: [onGitLab],
+    });
+    expect(result.map((match) => match.host)).toEqual(["gitlab.example.com", undefined]);
+  });
+
+  it("folds the lookup row into the listed one once it carries the project host", () => {
+    const { host: _host, ...fromDetailLookup } = entry(4, "2026-01-01");
+    const listed = [entry(5, "2026-01-02")];
+    const result = filterComposerPullRequestMatches({
+      entries: [
+        { ...fromDetailLookup, host: composerProjectPullRequestHost(listed, "owner/repo") },
+        ...listed,
+        entry(4, "2026-01-03"),
+      ],
       projectId: "p1",
       repository: "owner/repo",
       query: "4",
@@ -140,6 +164,17 @@ describe("filterComposerPullRequestMatches", () => {
       linked: [onGitLab],
     });
     expect(result.map((match) => match.host)).toEqual(["gitlab.example.com", "github.com"]);
+  });
+});
+
+describe("composerProjectPullRequestHost", () => {
+  it("takes the host from a row that names the project repository, else none", () => {
+    const rows = [
+      { ...entry(9, "2026-01-01"), repository: "owner/other", host: "gitlab.example.com" },
+      entry(1, "2026-01-01"),
+    ];
+    expect(composerProjectPullRequestHost(rows, "Owner/Repo")).toBe("github.com");
+    expect(composerProjectPullRequestHost([], "owner/repo")).toBeUndefined();
   });
 });
 

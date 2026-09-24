@@ -5,9 +5,10 @@ export interface ComposerPullRequestMatch {
   readonly projectId: string;
   /**
    * The host below which `repository` is addressed: the same `owner/repo` exists on two forges.
-   * Absent on a row the project's own lookup produced, which can only be on the project's host.
+   * Absent on a row the project's own lookup produced; `composerProjectPullRequestHost` fills it
+   * in from the rows that know the project's host before matching.
    */
-  readonly host?: string;
+  readonly host?: string | undefined;
   readonly repository: string;
   readonly updatedAt: string;
 }
@@ -25,8 +26,8 @@ const normalize = (value: string) => value.trim().toLowerCase();
 
 /**
  * Whether two composer rows name the same pull request: the host-level identity a thread link
- * carries, whatever the casing. A row without a host is the project's own, and matches either
- * host rather than none.
+ * carries, whatever the casing. A row still without a host only matches another such row, so a
+ * lookup row can never stand in for a linked pull request on a different host.
  */
 export function isSameComposerPullRequest(
   left: ComposerPullRequestIdentity,
@@ -35,10 +36,21 @@ export function isSameComposerPullRequest(
   return (
     left.number === right.number &&
     normalize(left.repository) === normalize(right.repository) &&
-    (left.host === undefined ||
-      right.host === undefined ||
-      normalize(left.host) === normalize(right.host))
+    normalize(left.host ?? "") === normalize(right.host ?? "")
   );
+}
+
+/**
+ * The host of the project's own repository, as the rows already on hand know it: the listing
+ * and the thread's links carry one, the exact lookup (`PullRequestDetail`) does not. Absent when
+ * no row names that repository yet.
+ */
+export function composerProjectPullRequestHost(
+  rows: ReadonlyArray<ComposerPullRequestMatch>,
+  repository: string,
+): string | undefined {
+  const target = normalize(repository);
+  return rows.find((row) => row.host !== undefined && normalize(row.repository) === target)?.host;
 }
 
 function isLinkedPullRequest(

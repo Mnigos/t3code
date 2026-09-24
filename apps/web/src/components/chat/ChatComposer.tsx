@@ -6,6 +6,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { AttachmentFilePreview } from "../files/AttachmentFilePreview";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import {
+  composerProjectPullRequestHost,
   composerPullRequestEntriesFromLinks,
   filterComposerPullRequestMatches,
   isSameComposerPullRequest,
@@ -2447,9 +2448,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       pullRequestProjectId !== null &&
       pullRequestRepository !== null
     ) {
+      const listedPullRequests = pullRequestLookup.data?.entries ?? [];
+      // The exact lookup row carries no host; give it the project's so it is told apart from a
+      // linked pull request of the same name on another host, and folded with its own listing.
       const exactPullRequest =
         exactPullRequestLookup.data?.number === pullRequestTriggerNumber
-          ? [exactPullRequestLookup.data]
+          ? [
+              {
+                ...exactPullRequestLookup.data,
+                host: composerProjectPullRequestHost(
+                  [...listedPullRequests, ...linkedPullRequestEntries],
+                  pullRequestRepository,
+                ),
+              },
+            ]
           : [];
       // The thread's own links come last so a fresher listing row wins the de-duplication, and
       // first in the text search, where they are the pull requests the thread is about.
@@ -2493,7 +2505,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ].slice(0, COMPOSER_PULL_REQUEST_RESULT_LIMIT);
       const projectRepository = pullRequestRepository.trim().toLowerCase();
       return matches.map((pullRequest) => ({
-        id: `pull-request:${"host" in pullRequest ? pullRequest.host : ""}:${pullRequest.projectId}:${pullRequest.repository}:${pullRequest.number}`,
+        id: `pull-request:${pullRequest.host ?? ""}:${pullRequest.projectId}:${pullRequest.repository}:${pullRequest.number}`,
         type: "pull-request",
         pullRequest: {
           number: pullRequest.number,
