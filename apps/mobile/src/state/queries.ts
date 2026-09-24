@@ -2,8 +2,8 @@ import {
   composerProjectPullRequestHost,
   composerPullRequestEntriesFromLinks,
   filterComposerPullRequestMatches,
-  isSameComposerPullRequest,
   matchesComposerPullRequestWords,
+  uniqueComposerPullRequests,
 } from "@t3tools/shared/composerPullRequestMatches";
 import type { VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
@@ -126,7 +126,9 @@ export function useComposerPullRequestSearch(input: {
       : null,
   );
   const number = numeric && query ? Number(query) : null;
-  const hasExact = list.data?.entries.some(
+  // A linked row for the project's own repository already answers the typed number, so the
+  // exact lookup, which would return the same pull request without a host, is not needed.
+  const hasExact = [...(list.data?.entries ?? []), ...linkedEntries].some(
     (entry) =>
       entry.number === number && entry.repository.toLowerCase() === input.repository?.toLowerCase(),
   );
@@ -147,7 +149,7 @@ export function useComposerPullRequestSearch(input: {
       ? [
           {
             ...exact.data,
-            host: composerProjectPullRequestHost([...listed, ...linkedEntries], input.repository!),
+            host: composerProjectPullRequestHost(listed, input.repository!),
           },
         ]
       : [];
@@ -166,18 +168,16 @@ export function useComposerPullRequestSearch(input: {
       (entry) =>
         entry.projectId === input.projectId &&
         entry.repository.toLowerCase() === input.repository?.toLowerCase() &&
-        !linkedEntries.some((link) => isSameComposerPullRequest(link, entry)) &&
         words.every((word) =>
           `${entry.title} ${entry.headBranch} ${entry.baseBranch}`.toLowerCase().includes(word),
         ),
     );
-    const unique = new Map<number, (typeof found)[number]>();
-    for (const entry of found) if (!unique.has(entry.number)) unique.set(entry.number, entry);
     // The thread's own links lead the text search: they are the pull requests the thread is about.
-    return [
+    // A listing row stays when its linked snapshot is stale and only the listing's title matches.
+    return uniqueComposerPullRequests([
       ...linkedEntries.filter((entry) => matchesComposerPullRequestWords(entry, query ?? "")),
-      ...[...unique.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-    ].slice(0, 20);
+      ...[...found].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    ]).slice(0, 20);
   }, [
     ready,
     exact.data,

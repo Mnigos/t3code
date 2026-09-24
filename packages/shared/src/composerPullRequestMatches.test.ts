@@ -8,6 +8,7 @@ import {
   composerPullRequestEntriesFromLinks,
   filterComposerPullRequestMatches,
   matchesComposerPullRequestWords,
+  uniqueComposerPullRequests,
 } from "./composerPullRequestMatches.ts";
 
 const entry = (number: number, updatedAt: string) => ({
@@ -168,13 +169,24 @@ describe("filterComposerPullRequestMatches", () => {
 });
 
 describe("composerProjectPullRequestHost", () => {
-  it("takes the host from a row that names the project repository, else none", () => {
+  it("takes the host from a listing row that names the project repository, else none", () => {
     const rows = [
       { ...entry(9, "2026-01-01"), repository: "owner/other", host: "gitlab.example.com" },
       entry(1, "2026-01-01"),
     ];
     expect(composerProjectPullRequestHost(rows, "Owner/Repo")).toBe("github.com");
     expect(composerProjectPullRequestHost([], "owner/repo")).toBeUndefined();
+  });
+});
+
+describe("uniqueComposerPullRequests", () => {
+  it("keeps the first row per pull request and rows on other hosts", () => {
+    const first = entry(4, "2026-01-01");
+    const onGitLab = { ...entry(4, "2026-01-01"), host: "gitlab.example.com" };
+    expect(uniqueComposerPullRequests([first, entry(4, "2026-01-02"), onGitLab])).toEqual([
+      first,
+      onGitLab,
+    ]);
   });
 });
 

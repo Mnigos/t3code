@@ -9,8 +9,8 @@ import {
   composerProjectPullRequestHost,
   composerPullRequestEntriesFromLinks,
   filterComposerPullRequestMatches,
-  isSameComposerPullRequest,
   matchesComposerPullRequestWords,
+  uniqueComposerPullRequests,
 } from "@t3tools/shared/composerPullRequestMatches";
 import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
 import { elementContextToPreviewAnnotation } from "../../lib/elementContext";
@@ -2322,14 +2322,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const debouncedPullRequestNumber = useDebouncedValue(pullRequestTriggerNumber, 180);
   const settledPullRequestNumber =
     pullRequestTriggerNumber === debouncedPullRequestNumber ? pullRequestTriggerNumber : null;
+  const linkedPullRequestEntries = useMemo(
+    () =>
+      pullRequestProjectId === null
+        ? []
+        : composerPullRequestEntriesFromLinks(pullRequestLinks, pullRequestProjectId),
+    [pullRequestLinks, pullRequestProjectId],
+  );
+  // A linked row for the project's own repository already answers the typed number, so the
+  // exact lookup, which would return the same pull request without a host, is not needed.
   const recentHasExactPullRequest =
     settledPullRequestNumber !== null &&
-    pullRequestLookup.data?.entries.some(
+    [...(pullRequestLookup.data?.entries ?? []), ...linkedPullRequestEntries].some(
       (entry) =>
         entry.projectId === pullRequestProjectId &&
         entry.repository.trim().toLowerCase() === pullRequestRepository?.trim().toLowerCase() &&
         entry.number === settledPullRequestNumber,
-    ) === true;
+    );
   const exactPullRequestLookup = useEnvironmentQuery(
     settledPullRequestNumber === null ||
       pullRequestProjectId === null ||
@@ -2344,14 +2353,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             number: settledPullRequestNumber,
           },
         }),
-  );
-
-  const linkedPullRequestEntries = useMemo(
-    () =>
-      pullRequestProjectId === null
-        ? []
-        : composerPullRequestEntriesFromLinks(pullRequestLinks, pullRequestProjectId),
-    [pullRequestLinks, pullRequestProjectId],
   );
 
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
@@ -2449,17 +2450,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       pullRequestRepository !== null
     ) {
       const listedPullRequests = pullRequestLookup.data?.entries ?? [];
-      // The exact lookup row carries no host; give it the project's so it is told apart from a
-      // linked pull request of the same name on another host, and folded with its own listing.
+      // The exact lookup row carries no host; give it the project's, as the listing knows it, so
+      // it is told apart from a linked pull request of the same name on another host.
       const exactPullRequest =
         exactPullRequestLookup.data?.number === pullRequestTriggerNumber
           ? [
               {
                 ...exactPullRequestLookup.data,
-                host: composerProjectPullRequestHost(
-                  [...listedPullRequests, ...linkedPullRequestEntries],
-                  pullRequestRepository,
-                ),
+                host: composerProjectPullRequestHost(listedPullRequests, pullRequestRepository),
               },
             ]
           : [];
@@ -2478,17 +2476,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             limit: COMPOSER_PULL_REQUEST_RESULT_LIMIT,
             linked: linkedPullRequestEntries,
           })
-        : [
+        : // A listing row stays when its linked snapshot is stale and only the listing's title
+          // matches; when both match, the linked row is the one kept.
+          uniqueComposerPullRequests([
             ...linkedPullRequestEntries.filter((entry) =>
               matchesComposerPullRequestWords(entry, composerTrigger.query),
             ),
             ...rankPullRequestMatches(
-              (pullRequestLookup.data?.entries ?? []).filter((entry) => {
+              listedPullRequests.filter((entry) => {
                 if (
                   entry.projectId !== pullRequestProjectId ||
                   entry.repository.trim().toLowerCase() !==
-                    pullRequestRepository.trim().toLowerCase() ||
-                  linkedPullRequestEntries.some((link) => isSameComposerPullRequest(link, entry))
+                    pullRequestRepository.trim().toLowerCase()
                 ) {
                   return false;
                 }
@@ -2502,7 +2501,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               }),
               composerTrigger.query,
             ),
-          ].slice(0, COMPOSER_PULL_REQUEST_RESULT_LIMIT);
+          ]).slice(0, COMPOSER_PULL_REQUEST_RESULT_LIMIT);
       const projectRepository = pullRequestRepository.trim().toLowerCase();
       return matches.map((pullRequest) => ({
         id: `pull-request:${pullRequest.host ?? ""}:${pullRequest.projectId}:${pullRequest.repository}:${pullRequest.number}`,
