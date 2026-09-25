@@ -3,8 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   assistantCitationDraftKey,
-  clearAssistantCitationCommentDraftsForComposer,
   readAssistantCitationCommentDraft,
+  restoreAssistantCitationCommentDrafts,
+  takeAssistantCitationCommentDraftsForComposer,
   writeAssistantCitationCommentDraft,
 } from "./assistantCitationCommentDrafts";
 
@@ -44,8 +45,8 @@ describe("assistantCitationDraftKey", () => {
   });
 });
 
-describe("clearAssistantCitationCommentDraftsForComposer", () => {
-  it("drops the sent composer's drafts and keeps every other composer's", () => {
+describe("takeAssistantCitationCommentDraftsForComposer", () => {
+  it("takes the sent composer's drafts, keeps every other composer's, and restores what it took", () => {
     const sent = assistantCitationDraftKey(citation, [], "thread-a");
     const sentDuplicate = assistantCitationDraftKey(citation, [citation], "thread-a");
     const elsewhere = assistantCitationDraftKey(citation, [], "thread-b");
@@ -53,10 +54,16 @@ describe("clearAssistantCitationCommentDraftsForComposer", () => {
     writeAssistantCitationCommentDraft(sentDuplicate, "second");
     writeAssistantCitationCommentDraft(elsewhere, "other");
 
-    clearAssistantCitationCommentDraftsForComposer("thread-a");
+    const taken = takeAssistantCitationCommentDraftsForComposer("thread-a");
 
     expect(readAssistantCitationCommentDraft(sent)).toBeNull();
     expect(readAssistantCitationCommentDraft(sentDuplicate)).toBeNull();
     expect(readAssistantCitationCommentDraft(elsewhere)).toBe("other");
+
+    // A failed send gives the prompt back, and its drafts with it.
+    restoreAssistantCitationCommentDrafts(taken);
+
+    expect(readAssistantCitationCommentDraft(sent)).toBe("first");
+    expect(readAssistantCitationCommentDraft(sentDuplicate)).toBe("second");
   });
 });

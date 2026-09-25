@@ -44,15 +44,32 @@ export function clearAssistantCitationCommentDraft(key: string): void {
   drafts.delete(key);
 }
 
+export type AssistantCitationCommentDraftEntries = ReadonlyArray<
+  readonly [key: string, draft: string]
+>;
+
 /**
- * Drops every draft a composer still holds once its prompt has been sent. A
+ * Takes every draft a composer still holds once its prompt has been sent. A
  * popover that stayed open through the send (a comment over the length limit
  * keeps it open) would otherwise hand its text to the next prompt that cites
- * the same text in the same composer.
+ * the same text in the same composer. A send that fails gives the prompt back
+ * and restores these with it.
  */
-export function clearAssistantCitationCommentDraftsForComposer(scope: string): void {
+export function takeAssistantCitationCommentDraftsForComposer(
+  scope: string,
+): AssistantCitationCommentDraftEntries {
   const prefix = `${scope}\n`;
-  for (const key of drafts.keys()) {
-    if (key.startsWith(prefix)) drafts.delete(key);
+  const taken: Array<readonly [string, string]> = [];
+  for (const [key, draft] of drafts) {
+    if (!key.startsWith(prefix)) continue;
+    taken.push([key, draft]);
+    drafts.delete(key);
   }
+  return taken;
+}
+
+export function restoreAssistantCitationCommentDrafts(
+  entries: AssistantCitationCommentDraftEntries,
+): void {
+  for (const [key, draft] of entries) drafts.set(key, draft);
 }
