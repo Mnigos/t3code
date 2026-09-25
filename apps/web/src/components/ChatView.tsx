@@ -298,6 +298,8 @@ import {
   composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
+  composerTargetKey,
+  type ComposerThreadTarget,
   type DraftThreadEnvMode,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
@@ -370,6 +372,7 @@ import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { clearAssistantCitationCommentDraftsForComposer } from "./chat/assistantCitationCommentDrafts";
 import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
 import { resolveComposerTimelineInset, resolveScrollToEndClearance } from "./composerFooterLayout";
@@ -1642,7 +1645,15 @@ export default function ChatView(props: ChatViewProps) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
-  const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const clearComposerContent = useComposerDraftStore((store) => store.clearComposerContent);
+  // A sent prompt takes its unsaved citation comments with it (see assistantCitationCommentDrafts).
+  const clearComposerDraftContent = useCallback(
+    (target: ComposerThreadTarget) => {
+      clearComposerContent(target);
+      clearAssistantCitationCommentDraftsForComposer(composerTargetKey(target));
+    },
+    [clearComposerContent],
+  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
