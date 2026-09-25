@@ -1,7 +1,12 @@
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { assistantCitationDraftKey } from "./assistantCitationCommentDrafts";
+import {
+  assistantCitationDraftKey,
+  clearAssistantCitationCommentDraftsForComposer,
+  readAssistantCitationCommentDraft,
+  writeAssistantCitationCommentDraft,
+} from "./assistantCitationCommentDrafts";
 
 const citation: AssistantCitation = {
   version: 1,
@@ -36,5 +41,22 @@ describe("assistantCitationDraftKey", () => {
     expect(assistantCitationDraftKey(citation, [], "thread-a")).not.toBe(
       assistantCitationDraftKey(citation, [], "thread-b"),
     );
+  });
+});
+
+describe("clearAssistantCitationCommentDraftsForComposer", () => {
+  it("drops the sent composer's drafts and keeps every other composer's", () => {
+    const sent = assistantCitationDraftKey(citation, [], "thread-a");
+    const sentDuplicate = assistantCitationDraftKey(citation, [citation], "thread-a");
+    const elsewhere = assistantCitationDraftKey(citation, [], "thread-b");
+    writeAssistantCitationCommentDraft(sent, "first");
+    writeAssistantCitationCommentDraft(sentDuplicate, "second");
+    writeAssistantCitationCommentDraft(elsewhere, "other");
+
+    clearAssistantCitationCommentDraftsForComposer("thread-a");
+
+    expect(readAssistantCitationCommentDraft(sent)).toBeNull();
+    expect(readAssistantCitationCommentDraft(sentDuplicate)).toBeNull();
+    expect(readAssistantCitationCommentDraft(elsewhere)).toBe("other");
   });
 });

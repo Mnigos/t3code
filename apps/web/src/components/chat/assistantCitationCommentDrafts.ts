@@ -43,3 +43,16 @@ export function writeAssistantCitationCommentDraft(key: string, draft: string): 
 export function clearAssistantCitationCommentDraft(key: string): void {
   drafts.delete(key);
 }
+
+/**
+ * Drops every draft a composer still holds once its prompt has been sent. A
+ * popover that stayed open through the send (a comment over the length limit
+ * keeps it open) would otherwise hand its text to the next prompt that cites
+ * the same text in the same composer.
+ */
+export function clearAssistantCitationCommentDraftsForComposer(scope: string): void {
+  const prefix = `${scope}\n`;
+  for (const key of drafts.keys()) {
+    if (key.startsWith(prefix)) drafts.delete(key);
+  }
+}
