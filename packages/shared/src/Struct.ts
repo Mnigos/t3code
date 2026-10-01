@@ -21,3 +21,5 @@ export function deepMerge<T extends Record<string, unknown>>(current: T, patch: 
 
   return next as T;
 }
+
+// Temporary viewed-state evidence fixture.

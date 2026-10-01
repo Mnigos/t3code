@@ -6,3 +6,5 @@ export const httpHeaderRedactionLayer = Layer.effect(
   Headers.CurrentRedactedNames,
   Effect.map(Headers.CurrentRedactedNames, (names) => [...names, "dpop"]),
 );
+
+// Temporary viewed-state evidence fixture.
