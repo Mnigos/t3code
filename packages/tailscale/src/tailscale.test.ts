@@ -236,6 +236,8 @@ describe("tailscale", () => {
     return Effect.gen(function* () {
       assert.equal(yield* readTailscaleSshEnabled.pipe(Effect.provide(layer)), true);
       assert.equal(yield* parseTailscaleSshEnabled('{"RunSSH":false,"WantRunning":true}'), false);
+      assert.equal(yield* parseTailscaleSshEnabled('{"RunSSH":true,"ShieldsUp":false}'), true);
+      assert.equal(yield* parseTailscaleSshEnabled('{"RunSSH":true,"ShieldsUp":true}'), false);
       assert.equal(yield* parseTailscaleSshEnabled("{}"), false);
       const error = yield* parseTailscaleSshEnabled("{not-json").pipe(Effect.flip);
       assert.instanceOf(error, TailscaleStatusParseError);

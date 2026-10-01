@@ -284,17 +284,22 @@ export const readTailscaleStatus = readTailscaleCommandOutput("status", ["status
 
 const TailscalePrefsJson = Schema.Struct({
   RunSSH: Schema.optional(Schema.Unknown),
+  ShieldsUp: Schema.optional(Schema.Unknown),
 });
 
 const decodeTailscalePrefsJson = Schema.decodeEffect(Schema.fromJsonString(TailscalePrefsJson));
 
-/** Whether the local node serves Tailscale SSH (`tailscale up --ssh`), from its prefs. */
+/**
+ * Whether the local node serves Tailscale SSH (`tailscale up --ssh`), from its
+ * prefs. Shields Up refuses every incoming connection, Tailscale SSH included,
+ * so a node with it on is not serving.
+ */
 export const parseTailscaleSshEnabled = (
   rawPrefsJson: string,
 ): Effect.Effect<boolean, TailscaleStatusParseError> =>
   decodeTailscalePrefsJson(rawPrefsJson).pipe(
     Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
-    Effect.map((parsed) => parsed.RunSSH === true),
+    Effect.map((parsed) => parsed.RunSSH === true && parsed.ShieldsUp !== true),
   );
 
 /**
