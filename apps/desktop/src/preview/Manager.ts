@@ -3731,6 +3731,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  // A webview and its embedder can both report isFocused() on macOS. Use the
+  // embedder's focused frame to distinguish the guest from the host renderer.
+  const focusedRenderer = () => {
+    const focused = webContents.getFocusedWebContents();
+    const frame = (focused?.hostWebContents ?? focused)?.focusedFrame;
+    return (frame && webContents.fromFrame(frame)) || focused;
+  };
+
   // Dispatching input moves keyboard focus into the guest renderer as a side
   // effect. Hand it back to whatever had it before, so the user's next keystroke
   // does not land in the previewed page, which may not even be visible.
@@ -3740,13 +3748,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       tabId: string,
       wc: Electron.WebContents,
       previouslyFocused: Electron.WebContents | null,
+      focusKey: string,
     ) {
       if (!previouslyFocused || previouslyFocused.id === wc.id || previouslyFocused.isDestroyed()) {
         return;
       }
       // A newer selection the user made while the action ran wins over the restore.
       const focusedNow = yield* attempt({ operation, tabId, webContentsId: wc.id }, () =>
-        webContents.getFocusedWebContents(),
+        focusedRenderer(),
       ).pipe(Effect.orElseSucceed(() => null));
       if (focusedNow && focusedNow.id !== wc.id && focusedNow.id !== previouslyFocused.id) {
         return;
@@ -3755,8 +3764,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (focusedNow === null && BrowserWindow.getFocusedWindow() === null) {
         return;
       }
-      yield* attempt({ operation, tabId, webContentsId: previouslyFocused.id }, () =>
-        previouslyFocused.focus(),
+      yield* attemptPromise({ operation, tabId, webContentsId: previouslyFocused.id }, () =>
+        previouslyFocused.executeJavaScript(`globalThis[${focusKey}]?.()`),
       ).pipe(Effect.ignore);
     },
   );
@@ -3769,8 +3778,27 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   ) {
     const previouslyFocused = yield* attempt(
       { operation: "automationClick.getFocusedWebContents", tabId, webContentsId: wc.id },
-      () => webContents.getFocusedWebContents(),
+      () => focusedRenderer(),
     );
+    const context = { operation: "automationClick.preserveFocus", tabId, webContentsId: wc.id };
+    const focusKey = yield* encodeJson(context, `__t3AutomationFocus_${NodeCrypto.randomUUID()}`);
+    const previewTab = yield* encodeJson(context, tabId);
+    // Native window focus does not restore the embedder's DOM focus after a
+    // webview click. Keep the element in its renderer, including its selection.
+    if (previouslyFocused && previouslyFocused.id !== wc.id) {
+      yield* attemptPromise(context, () =>
+        previouslyFocused.executeJavaScript(`(() => {
+          const element = document.activeElement;
+          globalThis[${focusKey}] = () => {
+            const active = document.activeElement;
+            if (element?.isConnected && (active === element ||
+                active?.getAttribute("data-preview-tab") === ${previewTab})) {
+              element.focus({ preventScroll: true });
+            }
+          };
+        })()`),
+      ).pipe(Effect.ignore);
+    }
     yield* dispatchAutomationClick(tabId, input, send).pipe(
       Effect.ensuring(
         restoreFocusedWebContents(
@@ -3778,7 +3806,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           tabId,
           wc,
           previouslyFocused,
+          focusKey,
         ),
+      ),
+      Effect.ensuring(
+        previouslyFocused && previouslyFocused.id !== wc.id
+          ? attemptPromise(context, () =>
+              previouslyFocused.executeJavaScript(`delete globalThis[${focusKey}]`),
+            ).pipe(Effect.ignore)
+          : Effect.void,
       ),
     );
   });
