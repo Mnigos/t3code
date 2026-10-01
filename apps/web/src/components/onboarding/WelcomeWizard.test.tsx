@@ -31,6 +31,7 @@ vi.mock("../../state/environments", () => {
   const environment = {
     environmentId: "test-env",
     label: "Computer",
+    entry: { enabled: true },
     connection: { phase: "connected" },
   };
   return {
@@ -70,6 +71,7 @@ vi.mock("../../onboarding/useProjectScans", () => ({
   ],
 }));
 vi.mock("../../connection/onboarding", () => ({ connectPairing: vi.fn() }));
+vi.mock("../../connection/catalog", () => ({ environmentCatalog: { setEnabled: "setEnabled" } }));
 vi.mock("../../state/terminal", () => ({ terminalEnvironment: {} }));
 vi.mock("../clerk/useT3ConnectAuthPrompt", () => ({ useT3ConnectAuthPrompt: vi.fn() }));
 vi.mock("../../cloud/publicConfig", () => ({ hasCloudPublicConfig: () => false }));
