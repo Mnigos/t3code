@@ -432,6 +432,11 @@ describe("task group summaries", () => {
     expect(toolGroupSummaryKind([backgroundTask])).toBe("tone-tool");
     expect(toolGroupSummaryKind([backgroundTask, backgroundTask])).toBe("tone-tool");
   });
+
+  it("does not present a running background task's progress row as an agent", () => {
+    expect(toolGroupSummaryKind([{ ...backgroundTask, tone: "thinking" }])).toBe("other");
+    expect(toolGroupSummaryKind([{ ...agentTask, tone: "thinking" }])).toBe("agent-tool");
+  });
 });
 
 describe("command work-log details", () => {

@@ -622,7 +622,7 @@ export function toolGroupSummaryKind(
       ) {
         return "agent-tool";
       }
-      if (entry.tone === "thinking") return "agent-tool";
+      if (entry.tone === "thinking" && !entry.isBackgroundTask) return "agent-tool";
       if (entry.tone === "tool") return "tone-tool";
       return "other";
     }),
