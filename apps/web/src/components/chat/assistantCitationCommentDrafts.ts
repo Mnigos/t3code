@@ -1,5 +1,11 @@
 import type { AssistantCitation } from "@t3tools/contracts";
-import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import {
+  collectAssistantCitations,
+  serializeAssistantCitation,
+  withAssistantCitationComment,
+} from "@t3tools/shared/assistantCitations";
+
+import { resolveAssistantCitationCommentDismissal } from "./assistantCitationCommentDismissal";
 
 /**
  * Unsaved citation comments, keyed by the serialized citation. The comment
@@ -42,6 +48,47 @@ export function writeAssistantCitationCommentDraft(key: string, draft: string): 
 
 export function clearAssistantCitationCommentDraft(key: string): void {
   drafts.delete(key);
+}
+
+/**
+ * Writes a composer's unsaved comments onto their citations in the prompt, the
+ * way dismissing the popover would have. Called when a question or an approval
+ * borrows the prompt editor: its chips unmount without a dismissal, and
+ * without this they would come back uncommented and Send would leave the
+ * comment out. A draft the dismissal rules would not commit (over the length
+ * limit) stays a draft and is resumed when its popover is opened again.
+ */
+export function commitAssistantCitationCommentDrafts(prompt: string, scope: string): string {
+  const citations = collectAssistantCitations(prompt);
+  // Keys are read off the prompt as it is: committing one comment changes that
+  // citation's serialized form, which the later duplicates' ordinals count.
+  const keys = citations.map((entry, index) =>
+    assistantCitationDraftKey(
+      entry.citation,
+      citations.slice(0, index).map((earlier) => earlier.citation),
+      scope,
+    ),
+  );
+  let committed = prompt;
+  for (let index = citations.length - 1; index >= 0; index -= 1) {
+    const { citation, start, end } = citations[index]!;
+    const key = keys[index]!;
+    const draft = drafts.get(key);
+    if (draft === undefined) continue;
+    const dismissal = resolveAssistantCitationCommentDismissal({
+      reason: "none",
+      draft,
+      savedComment: citation.comment,
+    });
+    if (dismissal.kind === "keep-open") continue;
+    drafts.delete(key);
+    if (dismissal.kind !== "commit") continue;
+    committed =
+      committed.slice(0, start) +
+      serializeAssistantCitation(withAssistantCitationComment(citation, dismissal.comment)) +
+      committed.slice(end);
+  }
+  return committed;
 }
 
 export type AssistantCitationCommentDraftEntries = ReadonlyArray<
