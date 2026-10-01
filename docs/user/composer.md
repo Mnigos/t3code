@@ -156,10 +156,6 @@ After you add or change skills, plugins, or MCP servers, use **Restart agent
 session** in the command palette on web and desktop. The conversation continues,
 and your next message starts the agent again with the new setup.
 
-After you add or change skills, plugins, or MCP servers, use **Restart agent
-session** in the command palette on web and desktop. The conversation continues,
-and your next message starts the agent again with the new setup.
-
 Provider commands must start the message to run. T3 Code commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
