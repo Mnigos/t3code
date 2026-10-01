@@ -226,6 +226,8 @@ function PullRequestCodeTab({
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   /** Paths whose tick has been read once for this mount; see `foldViewedFilesOnce`. */
   const seenViewedPathsRef = useRef<ReadonlySet<string>>(new Set());
+  /** Set by Expand all / Collapse all: from then on the reader's choice outranks the ticks. */
+  const readerSetAllFoldsRef = useRef(false);
   const pathByFileKeyRef = useRef<ReadonlyMap<string, string>>(new Map());
   const markViewedPathSeen = useCallback((path: string | undefined) => {
     if (path === undefined || seenViewedPathsRef.current.has(path)) return;
@@ -276,6 +278,7 @@ function PullRequestCodeTab({
     setSelectedLines(null);
     setToggledFiles(new Set());
     seenViewedPathsRef.current = new Set();
+    readerSetAllFoldsRef.current = false;
     setFoldOverride(null);
     setVisibleCommitCount(COMMIT_PAGE_SIZE);
     setOrphansOpen(false);
@@ -670,6 +673,9 @@ function PullRequestCodeTab({
   // first shows up with the host's answer, as its tick would have, and leave the rest alone.
   useEffect(() => {
     if (!filesViewedEnabled || !filesViewed.ready) return;
+    // Ticks that load after the reader expanded or folded everything, and files a paging diff
+    // brings in later, follow that choice instead of being folded behind it.
+    if (readerSetAllFoldsRef.current) return;
     const result = foldViewedFilesOnce(
       annotatedFiles.map(({ fileKey, path }) => ({
         fileKey,
@@ -723,6 +729,7 @@ function PullRequestCodeTab({
     // asked for everything to be open.
     setFoldOverride(areAllDiffFilesCollapsed(fileKeys, collapsedFileKeys) ? "expanded" : "folded");
     setToggledFiles(new Set());
+    readerSetAllFoldsRef.current = true;
   };
 
   // Newest first: the last commit is the one a reader coming back to a change is looking for.
