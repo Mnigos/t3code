@@ -143,10 +143,18 @@ export async function deliverSnapShot(
   bridge: DesktopSnapShotBridge,
   item: DesktopPendingSnapShot,
   target: CaptureTarget,
+  /** Read again once the file is in; the setting can flip during that read. */
+  isEnabled: () => boolean = () => true,
 ): Promise<void> {
   const store = useComposerDraftStore.getState();
   updateSnapShotAnimationSource(item.id, item.source);
   const capture = await bridge.readSnapShot(item.id);
+  if (!isEnabled()) {
+    // Nothing attached, nothing acknowledged: the capture stays pending and
+    // lands on the next drain after the feature is turned back on.
+    await dismissSnapShotAnimation(item.id);
+    return;
+  }
   const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
   const compressed = await compressImageToByteLimit(original, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
   if (!compressed.ok) {
@@ -326,7 +334,7 @@ export function SnapShotCoordinator() {
           }
 
           try {
-            await deliverSnapShot(bridge, item, target);
+            await deliverSnapShot(bridge, item, target, () => enabledRef.current);
             captureTargetsRef.current.delete(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
             undeliverableCaptureIdsRef.current.delete(item.id);

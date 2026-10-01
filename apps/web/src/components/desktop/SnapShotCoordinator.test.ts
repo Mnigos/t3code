@@ -265,6 +265,55 @@ describe("window capture delivery", () => {
   );
 });
 
+describe("window capture delivery after the feature turns off", () => {
+  it("leaves a capture pending when SnapShots go off while its file is being read", async () => {
+    const target = DraftId.make("snap-shot-draft");
+    let enabled = true;
+    const acknowledgeSnapShot = vi.fn(async () => undefined);
+    const bridge = {
+      readSnapShot: vi.fn(async () => {
+        enabled = false;
+        return {
+          id: "12345678-1234-1234-1234-123456789abc",
+          name: "window.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+          dataUrl: "data:image/png;base64,AQID",
+          source: {
+            kind: "snap-shot" as const,
+            capturedAt: "2026-09-01T00:00:00.000Z",
+            appName: "Editor",
+            windowTitle: "main.ts",
+          },
+        };
+      }),
+      acknowledgeSnapShot,
+    } as unknown as DesktopSnapShotBridge;
+    const item: DesktopPendingSnapShot = {
+      id: "12345678-1234-1234-1234-123456789abc",
+      name: "window.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      source: {
+        kind: "snap-shot",
+        capturedAt: "2026-09-01T00:00:00.000Z",
+        appName: "Editor",
+        windowTitle: "main.ts",
+      },
+    };
+    vi.stubGlobal("window", {
+      localStorage: storage,
+      desktopBridge: bridge,
+      dispatchEvent: vi.fn(),
+    });
+
+    await deliverSnapShot(bridge, item, target, () => enabled);
+
+    expect(useComposerDraftStore.getState().getComposerDraft(target)?.images ?? []).toHaveLength(0);
+    expect(acknowledgeSnapShot).not.toHaveBeenCalled();
+  });
+});
+
 describe("window capture target resolution", () => {
   it("shares bare-route draft creation between animation start and capture drain", async () => {
     const draftId = DraftId.make("snap-shot-draft");
