@@ -3784,7 +3784,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const focusKey = yield* encodeJson(context, `__t3AutomationFocus_${NodeCrypto.randomUUID()}`);
     const previewTab = yield* encodeJson(context, tabId);
     // Native window focus does not restore the embedder's DOM focus after a
-    // webview click. Keep the element in its renderer, including its selection.
+    // webview click. Keep the element reference in its renderer.
     if (previouslyFocused && previouslyFocused.id !== wc.id) {
       yield* attemptPromise(context, () =>
         previouslyFocused.executeJavaScript(`(() => {
