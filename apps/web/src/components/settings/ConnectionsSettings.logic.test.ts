@@ -48,6 +48,39 @@ describe("resolveLocalVersionStatusLabel", () => {
     },
   );
 
+  it("keeps the downloaded version pending during a recheck", () => {
+    const label = resolveLocalVersionStatusLabel({
+      ...baseState,
+      status: "checking",
+      downloadedVersion: "1.1.0",
+    });
+
+    expect(label).not.toBe("Up to date");
+    expect(label).toContain("1.1.0");
+    expect(label).toMatch(/downloaded/i);
+  });
+
+  it("stays up to date during a recheck with only an available version", () => {
+    expect(
+      resolveLocalVersionStatusLabel({
+        ...baseState,
+        status: "checking",
+        availableVersion: "1.1.0",
+      }),
+    ).toBe("Up to date");
+  });
+
+  it("stays up to date after a failed check with only an available version", () => {
+    expect(
+      resolveLocalVersionStatusLabel({
+        ...baseState,
+        status: "error",
+        errorContext: "check",
+        availableVersion: "1.1.0",
+      }),
+    ).toBe("Up to date");
+  });
+
   it.each<DesktopUpdateState["status"]>(["available", "downloading", "downloaded"])(
     "names the pending version when %s, falling back to the available version",
     (status) => {
@@ -59,6 +92,7 @@ describe("resolveLocalVersionStatusLabel", () => {
 
       expect(label).not.toBe("Up to date");
       expect(label).toContain("1.1.0");
+      expect(label).toMatch(new RegExp(status, "i"));
     },
   );
 
@@ -107,7 +141,10 @@ describe("resolveLocalVersionStatusLabel", () => {
   it.each<DesktopUpdateState["status"]>(["available", "downloading", "downloaded"])(
     "does not claim up to date when %s without a known version",
     (status) => {
-      expect(resolveLocalVersionStatusLabel({ ...baseState, status })).not.toBe("Up to date");
+      const label = resolveLocalVersionStatusLabel({ ...baseState, status });
+
+      expect(label).not.toBe("Up to date");
+      expect(label).toMatch(new RegExp(status, "i"));
     },
   );
 });

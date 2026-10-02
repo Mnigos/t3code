@@ -33,7 +33,8 @@ export function isWslSettingsRowVisible(input: {
  * versions match. The desktop bundles its server, so a pending app update is
  * the only way it falls behind. Pending updates follow the sidebar update
  * control's action, including retryable failures, so both agree; the sidebar
- * is where to act on it. `state` is null outside the desktop app.
+ * is where to act on it. A recheck never drops a downloaded update, so it
+ * keeps its label while `checking`. `state` is null outside the desktop app.
  */
 export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null): string {
   if (!state) return "Up to date";
@@ -43,7 +44,11 @@ export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null)
       : "Downloading update";
   }
   const action = resolveDesktopUpdateButtonAction(state);
-  if (action === "install" || state.status === "downloaded") {
+  if (
+    action === "install" ||
+    state.status === "downloaded" ||
+    (state.status === "checking" && state.downloadedVersion !== null)
+  ) {
     const version = getDesktopUpdateDownloadedVersion(state);
     return version ? `Update ${version} downloaded` : "Update downloaded";
   }
