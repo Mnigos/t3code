@@ -1194,6 +1194,8 @@ export function deriveMessagesTimelineRows(input: {
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  /** Live runs in ordinal order (`deriveLiveRunIds`), for reverting runs without a checkpoint. */
+  liveRunIds?: ReadonlyArray<RunId>;
   supportsConversationRollback: boolean;
   /** Task ids of subagents still working, used by the active tool indicator. */
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
@@ -1213,6 +1215,7 @@ export function deriveMessagesTimelineRows(input: {
     ? deriveRevertTurnCountByUserMessageId({
         timelineEntries: timelineEntries,
         checkpoints: input.turnDiffSummaries,
+        ...(input.liveRunIds === undefined ? {} : { liveRunIds: input.liveRunIds }),
       })
     : new Map<MessageId, number>();
   const nextRows: MessagesTimelineRow[] = [];

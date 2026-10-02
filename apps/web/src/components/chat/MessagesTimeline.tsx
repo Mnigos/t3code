@@ -21,6 +21,7 @@ import {
   type AssistantCitation,
   type EnvironmentId,
   type MessageId,
+  type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   type RunAttemptId,
   type ScopedThreadRef,
@@ -83,6 +84,7 @@ import {
   type TimelineEntry,
   providerErrorPresentation,
   createMessageAttachmentPreviewProjector,
+  deriveLiveRunIds,
   selectMessageImageResources,
   workEntryDisplayIndicatesToolFailure,
   workEntrySignalsSevereFailure,
@@ -453,7 +455,7 @@ interface MessagesTimelineProps {
   workspaceRoot: string | undefined;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   providerStatuses: ReadonlyArray<ServerProvider>;
-  runs: ReadonlyArray<HandoffTimelineRun>;
+  runs: ReadonlyArray<HandoffTimelineRun & Pick<OrchestrationV2Run, "status">>;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
@@ -738,6 +740,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     readonly workspaceRoot: string | undefined;
     readonly projection: MessagesTimelineRowsProjection;
   } | null>(null);
+  const liveRunIds = useStableLiveRunIds(runsProp);
   const rawRows = useMemo(() => {
     const previous = rowsProjectionRef.current;
     const projection = deriveMessagesTimelineRowsWithState(
@@ -752,6 +755,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         runlessWorkActive,
         activeTurnStartedAt,
         turnDiffSummaries,
+        liveRunIds,
         supportsConversationRollback,
         worktreeSetup,
       },
@@ -775,6 +779,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     runlessWorkActive,
     activeTurnStartedAt,
     turnDiffSummaries,
+    liveRunIds,
     supportsConversationRollback,
     worktreeSetup,
   ]);
@@ -4479,6 +4484,23 @@ function useStableHandoffRuns(
     }));
     prev.current = { signature, value };
     return value;
+  }, [runs]);
+}
+
+/** `deriveLiveRunIds` that keeps its reference until a run is added or rolled
+ *  back, so run status churn does not rebuild the timeline rows. */
+function useStableLiveRunIds(
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "ordinal" | "status">>,
+): ReadonlyArray<RunId> {
+  const prev = useRef<{ signature: string; value: ReadonlyArray<RunId> }>({
+    signature: "",
+    value: [],
+  });
+  return useMemo(() => {
+    const value = deriveLiveRunIds(runs);
+    const signature = value.join("\n");
+    if (signature !== prev.current.signature) prev.current = { signature, value };
+    return prev.current.value;
   }, [runs]);
 }
 
