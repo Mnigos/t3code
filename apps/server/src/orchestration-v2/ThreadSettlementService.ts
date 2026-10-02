@@ -197,8 +197,16 @@ export function resolveAutoSettlementAt(input: {
     return activityAtMs === null ? thread.createdAt : DateTime.makeUnsafe(activityAtMs);
   }
   if (input.autoSettleAfterDays === null || activityAtMs === null) return null;
-  return activityAtMs < input.nowMs - input.autoSettleAfterDays * DAY_MS
-    ? DateTime.makeUnsafe(activityAtMs)
+  // A timed wake fires no event, so the inactivity window restarts at the
+  // wake time; otherwise work idle since before the snooze settles on the
+  // first sweep after it wakes. A snooze still in the future never anchors.
+  const snoozedUntilMs = toMillis(thread.snoozedUntil);
+  const inactiveSinceMs =
+    snoozedUntilMs !== null && snoozedUntilMs <= input.nowMs
+      ? Math.max(activityAtMs, snoozedUntilMs)
+      : activityAtMs;
+  return inactiveSinceMs < input.nowMs - input.autoSettleAfterDays * DAY_MS
+    ? DateTime.makeUnsafe(inactiveSinceMs)
     : null;
 }
 
