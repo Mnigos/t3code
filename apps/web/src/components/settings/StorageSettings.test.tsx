@@ -295,6 +295,29 @@ describe("Delete inactive worktrees", () => {
     ui.expectSaved(30);
   });
 
+  it("keeps a partially saved age on without a value push and can switch it off", async () => {
+    const ui = await setup(rule, null, { deferred: true });
+    await ui.clickSwitch();
+    await ui.type("30");
+    await ui.press("Enter");
+    await ui.finishSave(true);
+    // Another environment saved, but the representative environment still reports null.
+    ui.expectOn(30);
+    ui.expectSaved(30);
+    await ui.clickSwitch();
+    ui.expectOff();
+    expect(state.update.mock.calls).toEqual([
+      [{ storageCleanup: { [rule.key]: 30 } }],
+      [{ storageCleanup: { [rule.key]: null } }],
+    ]);
+    await ui.finishSave(true, 1);
+    ui.expectOff();
+    expect(state.update.mock.calls).toEqual([
+      [{ storageCleanup: { [rule.key]: 30 } }],
+      [{ storageCleanup: { [rule.key]: null } }],
+    ]);
+  });
+
   it("saves the untouched visible 8 once on Enter", async () => {
     const ui = await setup(rule);
     await ui.clickSwitch();
@@ -303,6 +326,50 @@ describe("Delete inactive worktrees", () => {
     await ui.leave();
     ui.expectOn(8);
     ui.expectSaved(8);
+  });
+
+  it("keeps a draft focused on composing Enter and saves on normal Enter", async ({ skip }) => {
+    const ui = await setup(rule);
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    if (!event.isComposing) skip("KeyboardEvent does not support isComposing");
+    expect(event.isComposing).toBe(true);
+    await ui.clickSwitch();
+    await act(async () => {
+      ui.input().dispatchEvent(event);
+    });
+    ui.expectOn(8);
+    expect(document.activeElement).toBe(ui.input());
+    expect(state.update).not.toHaveBeenCalled();
+    await ui.press("Enter");
+    ui.expectOn(8);
+    ui.expectSaved(8);
+  });
+
+  it("leaves composing Escape unconsumed and cancels on normal Escape", async ({ skip }) => {
+    const ui = await setup(rule);
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    if (!event.isComposing) skip("KeyboardEvent does not support isComposing");
+    expect(event.isComposing).toBe(true);
+    await ui.clickSwitch();
+    await act(async () => {
+      ui.input().dispatchEvent(event);
+    });
+    ui.expectOn(8);
+    expect(event.defaultPrevented).toBe(false);
+    expect(state.update).not.toHaveBeenCalled();
+    await ui.press("Escape");
+    ui.expectOff();
+    expect(state.update).not.toHaveBeenCalled();
   });
 
   it("returns to Off without saving when leaving an untouched draft", async () => {

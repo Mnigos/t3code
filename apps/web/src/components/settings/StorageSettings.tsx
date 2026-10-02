@@ -83,7 +83,7 @@ function RetentionControl({
     setDraft(days);
     const saved = onChange(days);
     if (!session) return;
-    // Stay on with this age until the saved value arrives; fall back if the save fails.
+    // Stay on with this age until the saved value arrives; fall back if nothing was saved.
     const token = open(days);
     void saved.then((ok) => {
       if (!ok && openRef.current === token) close();
@@ -98,7 +98,7 @@ function RetentionControl({
         if (drafting && !event.currentTarget.contains(event.relatedTarget)) commit(null);
       }}
       onKeyDown={(event) => {
-        if (!drafting || event.key !== "Escape") return;
+        if (!drafting || event.key !== "Escape" || event.nativeEvent.isComposing) return;
         // Consume Escape so the settings page does not also navigate back.
         event.preventDefault();
         event.stopPropagation();
@@ -125,7 +125,7 @@ function RetentionControl({
               size={new Intl.NumberFormat().format(draft ?? value ?? 0).length}
               className="field-sizing-content w-auto min-w-[1ch] grow-0 text-right"
               onKeyDown={(event) => {
-                if (!drafting || event.key !== "Enter") return;
+                if (!drafting || event.key !== "Enter" || event.nativeEvent.isComposing) return;
                 // Moving focus lets base-ui commit typed text on blur; only text still showing
                 // the draft (the untouched default) is committed here.
                 const untouched =
