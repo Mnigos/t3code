@@ -129,7 +129,8 @@ const registerPairingConnection = Effect.fn(
 )(function* (input: PairingConnectionInput) {
   const registration = yield* preparePairingRegistration(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-  yield* registry.register(registration);
+  // A platform-managed environment belongs to the host, so pairing leaves it alone.
+  if (!(yield* registry.register(registration))) return registration.target.environmentId;
   // Registering keeps a previous entry's switched-off flag and unsupported
   // reason, which is right for label or URL edits. A pairing is an explicit
   // request to connect, so the stale reason is cleared and the environment

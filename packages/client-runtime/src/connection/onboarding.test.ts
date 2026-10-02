@@ -17,11 +17,16 @@ import {
   BearerConnectionCredential,
   BearerConnectionProfile,
   BearerConnectionRegistration,
+  PrimaryConnectionRegistration,
 } from "./catalog.ts";
 import * as Connectivity from "./connectivity.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import * as ConnectionDriver from "./driver.ts";
-import { BearerConnectionTarget, ConnectionBlockedError } from "./model.ts";
+import {
+  BearerConnectionTarget,
+  ConnectionBlockedError,
+  PrimaryConnectionTarget,
+} from "./model.ts";
 import {
   ConnectionOnboarding,
   layer as onboardingLayer,
@@ -307,6 +312,33 @@ describe("connection onboarding", () => {
       expect(entry?.enabled).toBe(true);
       expect(entry?.unsupportedReason).toBeUndefined();
       expect(entry?.profile).toEqual(Option.some(PAIRED_PROFILE));
+    }).pipe(Effect.provide(pairingOnboardingLayer())),
+  );
+
+  it.effect("leaves a platform-managed environment untouched when its id is paired", () =>
+    Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const onboarding = yield* ConnectionOnboarding;
+      yield* registry.registerPlatform(
+        new PrimaryConnectionRegistration({
+          target: new PrimaryConnectionTarget({
+            environmentId: PAIRED_ENVIRONMENT_ID,
+            label: "Host environment",
+            httpBaseUrl: "http://127.0.0.1:3773",
+            wsBaseUrl: "ws://127.0.0.1:3773",
+          }),
+        }),
+      );
+      yield* registry.setCompatibility(PAIRED_ENVIRONMENT_ID, UNSUPPORTED_ERROR);
+      const before = yield* SubscriptionRef.get(registry.entries);
+      expect(before.get(PAIRED_ENVIRONMENT_ID)?.enabled).toBe(false);
+
+      const environmentId = yield* onboarding.registerPairing(PAIRING_INPUT);
+
+      expect(environmentId).toBe(PAIRED_ENVIRONMENT_ID);
+      const after = yield* SubscriptionRef.get(registry.entries);
+      expect(after).toEqual(before);
+      expect(after.get(PAIRED_ENVIRONMENT_ID)?.unsupportedReason).toBe(UNSUPPORTED_ERROR.message);
     }).pipe(Effect.provide(pairingOnboardingLayer())),
   );
 
