@@ -302,6 +302,92 @@ describe("resolveAutoSettlementAt", () => {
     ).toEqual(at(-10 * DAY_MS));
   });
 
+  it.each([
+    {
+      name: "preserves early completion as the anchor after the snooze deadline passes",
+      status: "idle" as const,
+      snoozedAt: at(-15 * DAY_MS),
+      latestRunCompletedAt: at(-10 * DAY_MS),
+      snoozedUntil: at(-DAY_MS),
+      expected: at(-10 * DAY_MS),
+    },
+    {
+      name: "preserves early failure as the anchor after the snooze deadline passes",
+      status: "failed" as const,
+      snoozedAt: at(-15 * DAY_MS),
+      latestRunCompletedAt: at(-10 * DAY_MS),
+      snoozedUntil: at(-DAY_MS),
+      expected: at(-10 * DAY_MS),
+    },
+    {
+      name: "preserves activity for a failed thread with an unknown snooze start after its deadline",
+      status: "failed" as const,
+      snoozedAt: null,
+      latestRunCompletedAt: at(-10 * DAY_MS),
+      snoozedUntil: at(-DAY_MS),
+      expected: at(-10 * DAY_MS),
+    },
+    {
+      name: "keeps a timed wake active when completion predates the snooze",
+      status: "idle" as const,
+      snoozedAt: at(-15 * DAY_MS),
+      latestRunCompletedAt: at(-20 * DAY_MS),
+      snoozedUntil: at(-DAY_MS),
+      expected: null,
+    },
+    {
+      name: "settles at the timed wake when completion predates the snooze",
+      status: "idle" as const,
+      snoozedAt: at(-15 * DAY_MS),
+      latestRunCompletedAt: at(-20 * DAY_MS),
+      snoozedUntil: at(-4 * DAY_MS),
+      expected: at(-4 * DAY_MS),
+    },
+  ])("$name", ({ status, snoozedAt, latestRunCompletedAt, snoozedUntil, expected }) => {
+    expect(
+      ThreadSettlementService.resolveAutoSettlementAt({
+        thread: shell({
+          status,
+          snoozedAt,
+          snoozedUntil,
+          latestUserMessageAt: at(-20 * DAY_MS),
+          latestRunRequestedAt: at(-20 * DAY_MS),
+          latestRunStartedAt: at(-20 * DAY_MS),
+          latestRunCompletedAt,
+        }),
+        pullRequest: null,
+        nowMs: NOW_MS,
+        autoSettleAfterDays: 3,
+        autoSettleOnMerge: false,
+      }),
+    ).toEqual(expected);
+  });
+
+  it("preserves the early completion anchor on both sides of the snooze deadline", () => {
+    const snoozedUntil = at(-DAY_MS);
+    const completedAt = at(-10 * DAY_MS);
+    const input = {
+      thread: shell({
+        snoozedAt: at(-15 * DAY_MS),
+        snoozedUntil,
+        latestUserMessageAt: at(-20 * DAY_MS),
+        latestRunRequestedAt: at(-20 * DAY_MS),
+        latestRunStartedAt: at(-20 * DAY_MS),
+        latestRunCompletedAt: completedAt,
+      }),
+      pullRequest: null,
+      autoSettleAfterDays: 3,
+      autoSettleOnMerge: false,
+    };
+    const deadlineMs = DateTime.toEpochMillis(snoozedUntil);
+    expect(
+      ThreadSettlementService.resolveAutoSettlementAt({ ...input, nowMs: deadlineMs - 60_000 }),
+    ).toEqual(completedAt);
+    expect(
+      ThreadSettlementService.resolveAutoSettlementAt({ ...input, nowMs: deadlineMs + 60_000 }),
+    ).toEqual(completedAt);
+  });
+
   it.each(["merged", "closed"] as const)(
     "preserves the activity anchor after waking when a pull request is %s",
     (state) => {
