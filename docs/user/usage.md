@@ -103,7 +103,8 @@ after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custo
 or endpoint configurations do not report subscription limits.
 
 Accounts with a monthly spending budget instead of rolling quotas, such as Claude Enterprise,
-show the budget as a monthly bar with the amount used so far.
+show the budget as a **Monthly spend** bar. On web and desktop, and in `/usage-limits`, the amount
+used so far appears with it.
 
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.

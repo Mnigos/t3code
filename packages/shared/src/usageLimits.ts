@@ -520,6 +520,18 @@ export function formatSpend(spend: ServerProviderUsageSpend): string {
   return `${format(spend.usedMinor)} of ${format(spend.limitMinor)}`;
 }
 
+/**
+ * The amount a pooled card can state: its budget when exactly one account
+ * reports it. Pools average account percentages, so a summed amount could
+ * contradict the pooled percent; with several accounts each one's amount
+ * shows on its own segment instead.
+ */
+export function singleAccountSpend(
+  members: readonly LimitPoolMember[],
+): ServerProviderUsageSpend | null {
+  return members.length === 1 ? (members[0]!.window.spend ?? null) : null;
+}
+
 function resetMillis(window: ServerProviderUsageWindow): number | null {
   if (window.resetsAt === undefined) return null;
   const at = Date.parse(window.resetsAt);
