@@ -24,6 +24,7 @@ import * as Settings from "../../../serverSettings.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
+import * as ProjectSettingsService from "../../../project/ProjectSettingsService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { ProjectHandlersLive } from "./handlers.ts";
 import { ProjectToolkit } from "./tools.ts";
@@ -196,47 +197,55 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       updatedAt: "2026-10-01T00:00:00.000Z",
       deletedAt: null,
     };
-    const dependencies = Layer.mergeAll(
-      NodeCrypto.layer,
-      Settings.ServerSettingsService.layerTest(),
-      Layer.succeed(McpInvocationContext.McpInvocationContext, {
-        environmentId: EnvironmentId.make("environment"),
-        threadId: sourceThreadId,
-        providerSessionId: "session",
-        providerInstanceId,
-        issuedAt: 0,
-        capabilities: new Set(["orchestration" as const]),
-      }),
-      Layer.mock(ThreadManagement.ThreadManagementService)({
-        getThreadShell: () => Effect.succeed(caller),
-      }),
-      Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
-      Layer.mock(Project.ProjectService)({
-        create: (input) =>
-          Effect.sync(() => {
-            registered.push(input.workspaceRoot);
-            return { ...createdProject, id: input.projectId, workspaceRoot: input.workspaceRoot };
+    const dependencies = ProjectSettingsService.layer.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          NodeCrypto.layer,
+          Settings.ServerSettingsService.layerTest(),
+          Layer.succeed(McpInvocationContext.McpInvocationContext, {
+            environmentId: EnvironmentId.make("environment"),
+            threadId: sourceThreadId,
+            providerSessionId: "session",
+            providerInstanceId,
+            issuedAt: 0,
+            capabilities: new Set(["orchestration" as const]),
           }),
-        getById: (projectId) =>
-          Effect.succeed(
-            projectId === createdProjectId ? Option.some(createdProject) : Option.none(),
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: () => Effect.succeed(caller),
+          }),
+          Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
+          Layer.mock(Project.ProjectService)({
+            create: (input) =>
+              Effect.sync(() => {
+                registered.push(input.workspaceRoot);
+                return {
+                  ...createdProject,
+                  id: input.projectId,
+                  workspaceRoot: input.workspaceRoot,
+                };
+              }),
+            getById: (projectId) =>
+              Effect.succeed(
+                projectId === createdProjectId ? Option.some(createdProject) : Option.none(),
+              ),
+          }),
+          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+            namedProjectsRoot: "/projects",
+            createNamedProject: (input) =>
+              Effect.sync(() => {
+                named.push(input.name);
+                return {
+                  projectId: createdProjectId,
+                  workspaceRoot: createdProject.workspaceRoot,
+                  commitError: "Git has no name or email on this machine.",
+                };
+              }),
+          }),
+          NodeServices.layer,
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-named-project-" }).pipe(
+            Layer.provide(NodeServices.layer),
           ),
-      }),
-      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-        namedProjectsRoot: "/projects",
-        createNamedProject: (input) =>
-          Effect.sync(() => {
-            named.push(input.name);
-            return {
-              projectId: createdProjectId,
-              workspaceRoot: createdProject.workspaceRoot,
-              commitError: "Git has no name or email on this machine.",
-            };
-          }),
-      }),
-      NodeServices.layer,
-      ServerConfig.layerTest(process.cwd(), { prefix: "t3-named-project-" }).pipe(
-        Layer.provide(NodeServices.layer),
+        ),
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
@@ -379,7 +388,9 @@ const makeProjectSettingsHarness = Effect.fn("makeProjectSettingsHarness")(funct
     }),
   );
   // handle provides dependencies on every call; retain one built settings instance.
-  const dependencies = Layer.succeedContext(yield* Layer.build(layer));
+  const dependencies = Layer.succeedContext(
+    yield* Layer.build(ProjectSettingsService.layer.pipe(Layer.provideMerge(layer))),
+  );
   const toolkit = yield* ProjectToolkit.pipe(
     Effect.provide(ProjectHandlersLive.pipe(Layer.provide(dependencies))),
   );

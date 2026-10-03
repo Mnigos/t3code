@@ -28,7 +28,7 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import * as Settings from "../../../serverSettings.ts";
+import * as ProjectSettingsService from "../../../project/ProjectSettingsService.ts";
 
 const shared = {
   success: Project,
@@ -43,7 +43,7 @@ const shared = {
 };
 // The project's model, env mode, auto-pull and scripts live in the
 // environment's per-project settings, not on the project record.
-const withSettings = [...shared.dependencies, Settings.ServerSettingsService];
+const withSettings = [...shared.dependencies, ProjectSettingsService.ProjectSettingsService];
 const ProjectListTool = Tool.make("t3_project_list", {
   ...shared,
   description:
