@@ -30,6 +30,7 @@ import {
 } from "@t3tools/contracts";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { errorTag } from "@t3tools/shared/observability";
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -982,7 +983,7 @@ const decodeCodexReasoningSummaryConfig = Schema.decodeUnknownEffect(CodexReason
  * summary the model supports. Model catalogue defaults never appear in
  * `config/read`; Codex's packaged defaults are not a user choice.
  */
-const resolveCodexReasoningSummary = Effect.fn("CodexAdapterV2.resolveReasoningSummary")(
+export const resolveCodexReasoningSummary = Effect.fn("CodexAdapterV2.resolveReasoningSummary")(
   function* (
     raw: Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">,
     cwd: string | null,
@@ -997,12 +998,13 @@ const resolveCodexReasoningSummary = Effect.fn("CodexAdapterV2.resolveReasoningS
       : summary;
   },
   // Older app servers lack `config/read`, and a silent one must not stall the
-  // turn; never fail it over this.
+  // turn; never fail it over this. Log only the tag: decode errors embed the
+  // response, and config can hold credentials.
   Effect.timeout("5 seconds"),
-  Effect.catch((cause) =>
-    Effect.logWarning("Failed to read Codex reasoning summary config.", { cause }).pipe(
-      Effect.as("auto" as const),
-    ),
+  Effect.catch((error) =>
+    Effect.logWarning("Failed to read Codex reasoning summary config.", {
+      errorTag: errorTag(error),
+    }).pipe(Effect.as("auto" as const)),
   ),
 );
 
