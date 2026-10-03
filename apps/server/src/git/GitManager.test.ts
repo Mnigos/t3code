@@ -5033,24 +5033,58 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
   );
 
   it.effect(
-    "hands back a clean PR head after provider refusal when fetching its head succeeds",
+    "passes up provider refusal on the PR branch when its head is already checked out",
     () =>
       Effect.gen(function* () {
+        const providerFailure = new Error("provider refused checkout");
         const { repoDir, headBranch, c1, checkout } = yield* makeLocalPullRequestFixture({
           prCheckout: () => {
-            throw new Error("provider refused checkout");
+            throw providerFailure;
           },
         });
         yield* runGit(repoDir, ["branch", "--unset-upstream"]);
 
-        const result = yield* checkout();
+        const error = yield* checkout().pipe(Effect.flip);
 
-        expect(result.branch).toBe(headBranch);
-        expect(result.isOnPullRequestHead).toBe(true);
+        expect(error).toMatchObject({
+          _tag: "SourceControlProviderError",
+          operation: "checkoutChangeRequest",
+          cause: { _tag: "GitHubCliCommandError", cause: providerFailure },
+        });
+        expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe(
+          headBranch,
+        );
         expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim()).toBe(c1);
         expect(
           (yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim(),
         ).toBe(`origin/${headBranch}`);
+        expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout).toBe("");
+      }),
+  );
+
+  it.effect(
+    "hands back a clean PR branch behind its head after provider refusal without moving it",
+    () =>
+      Effect.gen(function* () {
+        const { repoDir, headBranch, c1, checkout } = yield* makeLocalPullRequestFixture({
+          prCheckout: (cwd) => {
+            runGitSyncForFakeGh(cwd, ["checkout", "feature/pr-local-keeps-work"]);
+            throw new Error("provider refused checkout");
+          },
+        });
+        const c2 = yield* advanceLocalPullRequestRemote(repoDir);
+        yield* runGit(repoDir, ["checkout", "main"]);
+
+        const result = yield* checkout();
+
+        expect(result.branch).toBe(headBranch);
+        expect(result.worktreePath).toBeNull();
+        expect(result.isOnPullRequestHead).toBe(false);
+        expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe(
+          headBranch,
+        );
+        expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim()).toBe(c1);
+        expect((yield* runGit(repoDir, ["rev-parse", "@{upstream}"])).stdout.trim()).toBe(c2);
         expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout).toBe("");
       }),
   );
