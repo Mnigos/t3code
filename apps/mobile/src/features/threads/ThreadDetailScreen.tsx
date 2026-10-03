@@ -129,6 +129,7 @@ import {
 import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
+import { ComposerMergeBackNotice } from "./ComposerMergeBackNotice";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
@@ -143,6 +144,8 @@ export interface ThreadDetailScreenProps {
   readonly environmentLabel: string | null;
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
+  /** Set while a merged-back fork waits to be included in the next send. */
+  readonly pendingMergeBack: { readonly sourceThreadTitle: string | null } | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
@@ -1171,6 +1174,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       onCancel={props.onCancelQueuedRunEdit}
                     />
                   </Animated.View>
+                ) : null}
+                {props.pendingMergeBack !== null ? (
+                  <ComposerMergeBackNotice
+                    sourceThreadTitle={props.pendingMergeBack.sourceThreadTitle}
+                  />
                 ) : null}
                 <UsageLimitRecoveryCard
                   key={props.selectedThread.latestRun?.runId}

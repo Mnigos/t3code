@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2ContextTransfer,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   ThreadId,
@@ -39,6 +40,41 @@ export function resolveMergeBackTargetThreadId(
   return projection.thread.forkedFrom?.type === "run"
     ? projection.thread.forkedFrom.threadId
     : projection.thread.lineage.parentThreadId;
+}
+
+/**
+ * The merge-back the next send on this thread will carry, or null. Mirrors the
+ * server, which consumes only the newest pending merge-back targeting the thread.
+ */
+export function resolvePendingMergeBackTransfer(
+  projection: Pick<OrchestrationV2ThreadProjection, "contextTransfers" | "thread"> | null,
+): OrchestrationV2ContextTransfer | null {
+  if (projection === null) return null;
+  let latest: OrchestrationV2ContextTransfer | null = null;
+  for (const transfer of projection.contextTransfers) {
+    if (
+      transfer.type !== "merge_back" ||
+      transfer.status !== "pending" ||
+      transfer.targetThreadId !== projection.thread.id
+    ) {
+      continue;
+    }
+    if (
+      latest === null ||
+      DateTime.toEpochMillis(transfer.updatedAt) >= DateTime.toEpochMillis(latest.updatedAt)
+    ) {
+      latest = transfer;
+    }
+  }
+  return latest;
+}
+
+/** Copy for the composer notice shown while a merge-back waits for the next send. */
+export function pendingMergeBackNotice(sourceThreadTitle: string | null) {
+  return {
+    title: `Merged back from ${sourceThreadTitle ?? "a fork"}`,
+    description: "Its context will be included in your next message",
+  };
 }
 
 function edgeKey(edge: ThreadRelationshipEdge): string {

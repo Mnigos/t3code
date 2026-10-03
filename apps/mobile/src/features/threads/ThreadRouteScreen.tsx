@@ -67,7 +67,12 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
-import { resolveMergeBackTargetThreadId } from "@t3tools/client-runtime/state/thread-relationships";
+import {
+  resolveMergeBackTargetThreadId,
+  resolvePendingMergeBackTransfer,
+} from "@t3tools/client-runtime/state/thread-relationships";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useThreadShell } from "../../state/entities";
 import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import { threadEnvironment } from "../../state/threads";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
@@ -372,6 +377,25 @@ function ThreadRouteContent(
   const mergeBackRun =
     selectedThreadDetail === null ? null : resolveLatestMergeBackRun(selectedThreadDetail);
   const mergeBackBusyRef = useRef(false);
+  const pendingMergeBack = useMemo(
+    () => resolvePendingMergeBackTransfer(selectedThreadDetail),
+    [selectedThreadDetail],
+  );
+  const selectedEnvironmentId = selectedThread?.environmentId ?? null;
+  const pendingMergeBackSourceRef = useMemo(
+    () =>
+      pendingMergeBack === null || selectedEnvironmentId === null
+        ? null
+        : scopeThreadRef(selectedEnvironmentId, pendingMergeBack.sourceThreadId),
+    [pendingMergeBack, selectedEnvironmentId],
+  );
+  const pendingMergeBackSourceTitle = useThreadShell(pendingMergeBackSourceRef)?.title ?? null;
+  const hasPendingMergeBack = pendingMergeBack !== null;
+  // Stable identity keeps the memoized detail screen from re-rendering.
+  const pendingMergeBackNotice = useMemo(
+    () => (hasPendingMergeBack ? { sourceThreadTitle: pendingMergeBackSourceTitle } : null),
+    [hasPendingMergeBack, pendingMergeBackSourceTitle],
+  );
   const handleMergeBack = useCallback(async () => {
     if (
       mergeBackBusyRef.current ||
@@ -996,6 +1020,7 @@ function ThreadRouteContent(
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}
+          pendingMergeBack={pendingMergeBackNotice}
           selectedThreadFeed={composer.selectedThreadFeed}
           activityRun={composer.selectedThreadActivityRun}
           activeWorkStartedAt={
