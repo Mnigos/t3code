@@ -122,6 +122,64 @@ describe("background preview closes", () => {
     expect(activeSessions).not.toHaveProperty(scopedThreadKey(ref));
   });
 
+  it("clears old-epoch tabs when a background close arrives from a new server epoch", async () => {
+    const first = makeSnapshot({ tabId: "t1" });
+    const second = makeSnapshot({ tabId: "t2" });
+    await act(async () => {
+      reconcilePreviewServerSessions(ref, {
+        sessions: [first, second],
+        serverEpoch: "epoch-1",
+        revision: 2,
+      });
+    });
+    expect(activeSessions[scopedThreadKey(ref)]?.sessions).toEqual({ t1: first, t2: second });
+
+    await act(async () => {
+      applyBackgroundPreviewClose(environmentId, {
+        type: "closed",
+        threadId: ref.threadId,
+        tabId: "t-new",
+        serverEpoch: "epoch-2",
+        revision: 1,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+    });
+
+    const state = readThreadPreviewState(ref);
+    expect(state.sessions).toEqual({});
+    expect(activeSessions).not.toHaveProperty(scopedThreadKey(ref));
+    expect(state.serverEpoch).toBe("epoch-1");
+    expect(state.serverRevision).toBe(2);
+    expect(state.suppressedTabIds).toEqual(new Set(["t1", "t2"]));
+  });
+
+  it("removes only the closed tab when a background close has the same server epoch", async () => {
+    const first = makeSnapshot({ tabId: "t1" });
+    const second = makeSnapshot({ tabId: "t2" });
+    await act(async () => {
+      reconcilePreviewServerSessions(ref, {
+        sessions: [first, second],
+        serverEpoch: "epoch-1",
+        revision: 2,
+      });
+    });
+    expect(activeSessions[scopedThreadKey(ref)]?.sessions).toEqual({ t1: first, t2: second });
+
+    await act(async () => {
+      applyBackgroundPreviewClose(environmentId, {
+        type: "closed",
+        threadId: ref.threadId,
+        tabId: "t1",
+        serverEpoch: "epoch-1",
+        revision: 3,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+    });
+
+    expect(readThreadPreviewState(ref).sessions).toEqual({ t2: second });
+    expect(activeSessions[scopedThreadKey(ref)]?.sessions).toEqual({ t2: second });
+  });
+
   it("skips an unknown thread without creating state or changing active sessions", async () => {
     await act(async () => applyPreviewServerSnapshot(ref, makeSnapshot()));
     const before = activeSessions;
