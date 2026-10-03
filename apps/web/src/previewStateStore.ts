@@ -10,10 +10,12 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   type DesktopPreviewColorScheme,
   type DesktopPreviewFavicon,
+  type EnvironmentId,
   type PreviewEvent,
   type PreviewListResult,
   type PreviewSessionSnapshot,
   type ScopedThreadRef,
+  ThreadId,
 } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -238,6 +240,21 @@ export function applyPreviewServerEvent(ref: ScopedThreadRef, event: PreviewEven
           serverRevision: event.revision,
         };
   });
+}
+
+/**
+ * Apply a server close to a thread whose preview view may not be mounted, such
+ * as an archived thread removed with its project or a thread deleted on
+ * another device. Threads without live tabs are skipped to avoid creating state.
+ */
+export function applyBackgroundPreviewClose(
+  environmentId: EnvironmentId,
+  event: PreviewEvent,
+): void {
+  if (event.type !== "closed") return;
+  const ref = { environmentId, threadId: ThreadId.make(event.threadId) };
+  if (!appAtomRegistry.get(activePreviewThreadKeysAtom).keys.has(scopedThreadKey(ref))) return;
+  applyPreviewServerEvent(ref, event);
 }
 
 export function applyPreviewServerSnapshot(

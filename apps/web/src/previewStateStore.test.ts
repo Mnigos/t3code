@@ -5,10 +5,13 @@ import {
   type PreviewSessionSnapshot,
   ThreadId,
 } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { act, createElement, useEffect } from "react";
+import { create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   __testing,
+  applyBackgroundPreviewClose,
   applyPreviewDesktopState,
   applyPreviewServerEvent as applyPreviewServerEventImpl,
   applyPreviewServerSnapshot,
@@ -21,8 +24,9 @@ import {
   resetPreviewStateForTests,
   setActivePreviewTab,
   updatePreviewServerSnapshot,
+  useActivePreviewSessions,
 } from "./previewStateStore";
-import { appAtomRegistry } from "./rpc/atomRegistry";
+import { AppAtomRegistryProvider, appAtomRegistry } from "./rpc/atomRegistry";
 
 const environmentId = "env-1" as EnvironmentId;
 const ref = scopeThreadRef(environmentId, ThreadId.make("thread-1"));
@@ -58,6 +62,108 @@ const applyPreviewServerEvent = (eventRef: typeof ref, event: PreviewEventDraft)
 beforeEach(() => {
   nextServerRevision = 0;
   resetPreviewStateForTests();
+});
+
+describe("background preview closes", () => {
+  let renderer: ReactTestRenderer | null = null;
+  let activeSessions: ReturnType<typeof useActivePreviewSessions>;
+
+  function ActiveSessionsObserver() {
+    const sessions = useActivePreviewSessions();
+    useEffect(() => {
+      activeSessions = sessions;
+    }, [sessions]);
+    return null;
+  }
+
+  beforeEach(async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    await act(async () => {
+      renderer = create(
+        createElement(AppAtomRegistryProvider, null, createElement(ActiveSessionsObserver)),
+      );
+    });
+  });
+
+  afterEach(async () => {
+    await act(async () => renderer?.unmount());
+    renderer = null;
+    vi.unstubAllGlobals();
+  });
+
+  it("removes an unmounted archived thread from active sessions", async () => {
+    const snapshot = makeSnapshot();
+    await act(async () => {
+      applyPreviewServerEvent(ref, {
+        type: "opened",
+        threadId: ref.threadId,
+        tabId: snapshot.tabId,
+        createdAt: snapshot.updatedAt,
+        snapshot,
+      });
+    });
+    expect(activeSessions[scopedThreadKey(ref)]?.sessions).toEqual({
+      [snapshot.tabId]: snapshot,
+    });
+
+    await act(async () => {
+      applyBackgroundPreviewClose(environmentId, {
+        type: "closed",
+        threadId: ref.threadId,
+        tabId: snapshot.tabId,
+        serverEpoch,
+        revision: nextServerRevision + 1,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+    });
+
+    expect(readThreadPreviewState(ref).sessions).toEqual({});
+    expect(activeSessions).not.toHaveProperty(scopedThreadKey(ref));
+  });
+
+  it("skips an unknown thread without creating state or changing active sessions", async () => {
+    await act(async () => applyPreviewServerSnapshot(ref, makeSnapshot()));
+    const before = activeSessions;
+    const unknownRef = scopeThreadRef(environmentId, ThreadId.make("unknown-background-close"));
+    const unknownAtom = previewStateAtom(scopedThreadKey(unknownRef));
+    expect(appAtomRegistry.getNodes().has(unknownAtom)).toBe(false);
+
+    await act(async () => {
+      applyBackgroundPreviewClose(environmentId, {
+        type: "closed",
+        threadId: unknownRef.threadId,
+        tabId: "unknown-tab",
+        serverEpoch,
+        revision: 1,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+    });
+
+    expect(appAtomRegistry.getNodes().has(unknownAtom)).toBe(false);
+    expect(activeSessions).toBe(before);
+  });
+
+  it("ignores opened events for a thread with live tabs", async () => {
+    await act(async () => applyPreviewServerSnapshot(ref, makeSnapshot()));
+    const before = activeSessions;
+    const state = readThreadPreviewState(ref);
+    const snapshot = makeSnapshot({ tabId: "ignored-tab" });
+
+    await act(async () => {
+      applyBackgroundPreviewClose(environmentId, {
+        type: "opened",
+        threadId: ref.threadId,
+        tabId: snapshot.tabId,
+        snapshot,
+        serverEpoch,
+        revision: 1,
+        createdAt: snapshot.updatedAt,
+      });
+    });
+
+    expect(readThreadPreviewState(ref)).toBe(state);
+    expect(activeSessions).toBe(before);
+  });
 });
 
 describe("previewStateStore (single-tab)", () => {
