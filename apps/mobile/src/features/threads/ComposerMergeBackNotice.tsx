@@ -9,12 +9,16 @@ import { SymbolView } from "../../components/AppSymbol";
  * its own once the next run consumes the transfer and the feed shows the
  * context handoff divider.
  */
-export function ComposerMergeBackNotice(props: { readonly sourceThreadTitle: string | null }) {
-  const notice = pendingMergeBackNotice(props.sourceThreadTitle);
+export function ComposerMergeBackNotice(props: {
+  readonly sourceThreadTitle: string | null;
+  readonly forkCount: number;
+  readonly waitsForIdle: boolean;
+}) {
+  const notice = pendingMergeBackNotice(props);
   return (
     <View className="flex-row items-center gap-2 px-4 pb-2" accessibilityLiveRegion="polite">
       <SymbolView
-        name="arrow.triangle.merge"
+        name={notice.blocked ? "exclamationmark.triangle" : "arrow.triangle.merge"}
         size={12}
         tintColorClassName="accent-foreground-muted"
       />

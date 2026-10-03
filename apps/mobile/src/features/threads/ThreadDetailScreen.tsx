@@ -145,7 +145,11 @@ export interface ThreadDetailScreenProps {
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
   /** Set while a merged-back fork waits to be included in the next send. */
-  readonly pendingMergeBack: { readonly sourceThreadTitle: string | null } | null;
+  readonly pendingMergeBack: {
+    readonly sourceThreadTitle: string | null;
+    readonly forkCount: number;
+    readonly waitsForIdle: boolean;
+  } | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
@@ -1176,9 +1180,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   </Animated.View>
                 ) : null}
                 {props.pendingMergeBack !== null ? (
-                  <ComposerMergeBackNotice
-                    sourceThreadTitle={props.pendingMergeBack.sourceThreadTitle}
-                  />
+                  <ComposerMergeBackNotice {...props.pendingMergeBack} />
                 ) : null}
                 <UsageLimitRecoveryCard
                   key={props.selectedThread.latestRun?.runId}

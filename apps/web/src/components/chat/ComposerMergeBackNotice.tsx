@@ -12,11 +12,14 @@ import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 export function mergeBackBannerItem(input: {
   readonly transferId: ContextTransferId;
   readonly sourceThreadTitle: string | null;
+  readonly forkCount: number;
+  readonly waitsForIdle: boolean;
 }): ComposerBannerStackItem {
+  const { blocked, ...notice } = pendingMergeBackNotice(input);
   return {
     id: `merge-back:${input.transferId}`,
-    variant: "info",
+    variant: blocked ? "warning" : "info",
     icon: <PullRequestGlyph.merged />,
-    ...pendingMergeBackNotice(input.sourceThreadTitle),
+    ...notice,
   };
 }

@@ -69,7 +69,7 @@ import { useSelectedThreadWorktree } from "../../state/use-selected-thread-workt
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import {
   resolveMergeBackTargetThreadId,
-  resolvePendingMergeBackTransfer,
+  resolvePendingMergeBack,
 } from "@t3tools/client-runtime/state/thread-relationships";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useThreadShell } from "../../state/entities";
@@ -378,23 +378,37 @@ function ThreadRouteContent(
     selectedThreadDetail === null ? null : resolveLatestMergeBackRun(selectedThreadDetail);
   const mergeBackBusyRef = useRef(false);
   const pendingMergeBack = useMemo(
-    () => resolvePendingMergeBackTransfer(selectedThreadDetail),
+    () => resolvePendingMergeBack(selectedThreadDetail),
     [selectedThreadDetail],
   );
+  // Primitives keep the memoized detail screen stable while the projection streams.
+  const mergeBackSourceThreadId = pendingMergeBack?.transfer.sourceThreadId ?? null;
+  const mergeBackForkCount = pendingMergeBack?.forkCount ?? 0;
+  const mergeBackWaitsForIdle = pendingMergeBack?.waitsForIdle ?? false;
   const selectedEnvironmentId = selectedThread?.environmentId ?? null;
   const pendingMergeBackSourceRef = useMemo(
     () =>
-      pendingMergeBack === null || selectedEnvironmentId === null
+      mergeBackSourceThreadId === null || selectedEnvironmentId === null
         ? null
-        : scopeThreadRef(selectedEnvironmentId, pendingMergeBack.sourceThreadId),
-    [pendingMergeBack, selectedEnvironmentId],
+        : scopeThreadRef(selectedEnvironmentId, mergeBackSourceThreadId),
+    [mergeBackSourceThreadId, selectedEnvironmentId],
   );
   const pendingMergeBackSourceTitle = useThreadShell(pendingMergeBackSourceRef)?.title ?? null;
-  const hasPendingMergeBack = pendingMergeBack !== null;
-  // Stable identity keeps the memoized detail screen from re-rendering.
   const pendingMergeBackNotice = useMemo(
-    () => (hasPendingMergeBack ? { sourceThreadTitle: pendingMergeBackSourceTitle } : null),
-    [hasPendingMergeBack, pendingMergeBackSourceTitle],
+    () =>
+      mergeBackSourceThreadId === null
+        ? null
+        : {
+            sourceThreadTitle: pendingMergeBackSourceTitle,
+            forkCount: mergeBackForkCount,
+            waitsForIdle: mergeBackWaitsForIdle,
+          },
+    [
+      mergeBackForkCount,
+      mergeBackSourceThreadId,
+      mergeBackWaitsForIdle,
+      pendingMergeBackSourceTitle,
+    ],
   );
   const handleMergeBack = useCallback(async () => {
     if (

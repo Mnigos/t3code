@@ -15,6 +15,8 @@ import {
   orderWebThreadLineageRows,
   relatedThreadIds,
   resolveMergeBackTargetThreadId,
+  pendingMergeBackNotice,
+  resolvePendingMergeBack,
   resolvePendingMergeBackTransfer,
   walkThreadRelationships,
   threadRelationshipRowStatus,
@@ -599,5 +601,58 @@ describe("pending merge-back", () => {
     const replacement = transfer("replacement");
     expect(resolve([superseded, replacement])).toBe(replacement);
     expect(resolve([superseded, { ...replacement, status: "consumed" }])).toBeNull();
+  });
+
+  function resolveState(
+    contextTransfers: ReadonlyArray<OrchestrationV2ContextTransfer>,
+    runStatuses: ReadonlyArray<string> = [],
+  ) {
+    return resolvePendingMergeBack({
+      thread,
+      contextTransfers,
+      runs: runStatuses.map((status) => ({ status })) as never,
+    });
+  }
+
+  it("expects the next send to carry the transfer on an idle thread", () => {
+    const pending = transfer("pending");
+    expect(resolveState([pending], ["completed", "interrupted"])).toEqual({
+      transfer: pending,
+      forkCount: 1,
+      waitsForIdle: false,
+    });
+    expect(resolveState([])).toBeNull();
+    expect(resolvePendingMergeBack(null)).toBeNull();
+  });
+
+  it.each(["preparing", "starting", "running", "waiting"])(
+    "waits for idle while a run is %s, as the server rejects or steers that send",
+    (status) => {
+      expect(resolveState([transfer("pending")], ["completed", status])?.waitsForIdle).toBe(true);
+    },
+  );
+
+  it("counts distinct pending forks, which the server rejects together", () => {
+    const otherFork = ThreadId.make("thread-other-fork");
+    const later = DateTime.makeUnsafe("2026-06-20T00:01:00.000Z");
+    const state = resolveState([
+      transfer("fork-older", { status: "superseded" }),
+      transfer("fork-newer"),
+      transfer("other-fork", { sourceThreadId: otherFork, updatedAt: later }),
+      transfer("third-fork-done", { sourceThreadId: ThreadId.make("done"), status: "consumed" }),
+    ]);
+    expect(state?.forkCount).toBe(2);
+    expect(state?.transfer.id).toBe("other-fork");
+    expect(resolveState([transfer("a"), transfer("b", { updatedAt: later })])?.forkCount).toBe(1);
+  });
+
+  it("only marks the notice as blocking when more than one fork is pending", () => {
+    const notice = (forkCount: number, waitsForIdle: boolean) =>
+      pendingMergeBackNotice({ sourceThreadTitle: "Fork", forkCount, waitsForIdle });
+    expect(notice(1, false).blocked).toBe(false);
+    expect(notice(1, true).blocked).toBe(false);
+    expect(notice(1, true).description).not.toBe(notice(1, false).description);
+    expect(notice(2, false).blocked).toBe(true);
+    expect(notice(2, true).blocked).toBe(true);
   });
 });

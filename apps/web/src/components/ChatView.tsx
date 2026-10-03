@@ -98,7 +98,7 @@ import {
   presentPendingBackgroundWork,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
-import { resolvePendingMergeBackTransfer } from "@t3tools/client-runtime/state/thread-relationships";
+import { resolvePendingMergeBack } from "@t3tools/client-runtime/state/thread-relationships";
 import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
@@ -6975,26 +6975,33 @@ export default function ChatView(props: ChatViewProps) {
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
   const pendingMergeBack = useMemo(
-    () => resolvePendingMergeBackTransfer(serverProjection),
+    () => resolvePendingMergeBack(serverProjection),
     [serverProjection],
   );
+  // Primitives keep the banner stable while the projection streams.
+  const mergeBackTransferId = pendingMergeBack?.transfer.id ?? null;
+  const mergeBackSourceThreadId = pendingMergeBack?.transfer.sourceThreadId ?? null;
+  const mergeBackForkCount = pendingMergeBack?.forkCount ?? 0;
+  const mergeBackWaitsForIdle = pendingMergeBack?.waitsForIdle ?? false;
   const mergeBackSourceRef = useMemo(
     () =>
-      pendingMergeBack === null
+      mergeBackSourceThreadId === null
         ? null
-        : scopeThreadRef(environmentId, pendingMergeBack.sourceThreadId),
-    [environmentId, pendingMergeBack],
+        : scopeThreadRef(environmentId, mergeBackSourceThreadId),
+    [environmentId, mergeBackSourceThreadId],
   );
   const mergeBackSourceTitle = useThreadShell(mergeBackSourceRef)?.title ?? null;
   const mergeBackBanner = useMemo(
     () =>
-      pendingMergeBack === null
+      mergeBackTransferId === null
         ? null
         : mergeBackBannerItem({
-            transferId: pendingMergeBack.id,
+            transferId: mergeBackTransferId,
             sourceThreadTitle: mergeBackSourceTitle,
+            forkCount: mergeBackForkCount,
+            waitsForIdle: mergeBackWaitsForIdle,
           }),
-    [mergeBackSourceTitle, pendingMergeBack],
+    [mergeBackForkCount, mergeBackSourceTitle, mergeBackTransferId, mergeBackWaitsForIdle],
   );
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (!activeThreadSnoozed && !activeThreadSettled) {

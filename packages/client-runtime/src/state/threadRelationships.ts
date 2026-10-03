@@ -6,6 +6,8 @@ import type {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { resolveActiveThreadRun } from "./threadWorkflows.ts";
+
 export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
 
 export interface ThreadRelationshipNode {
@@ -69,11 +71,56 @@ export function resolvePendingMergeBackTransfer(
   return latest;
 }
 
-/** Copy for the composer notice shown while a merge-back waits for the next send. */
-export function pendingMergeBackNotice(sourceThreadTitle: string | null) {
+export interface PendingMergeBack {
+  readonly transfer: OrchestrationV2ContextTransfer;
+  /** Distinct forks with a pending merge-back here. The server rejects sends while this exceeds 1. */
+  readonly forkCount: number;
+  /** A run is active. The server only consumes the transfer on a send made once the thread is idle. */
+  readonly waitsForIdle: boolean;
+}
+
+/** The pending merge-back on this thread, with what keeps the next send from carrying it. */
+export function resolvePendingMergeBack(
+  projection: Pick<OrchestrationV2ThreadProjection, "contextTransfers" | "runs" | "thread"> | null,
+): PendingMergeBack | null {
+  const transfer = resolvePendingMergeBackTransfer(projection);
+  if (projection === null || transfer === null) return null;
+  const forks = new Set<ThreadId>();
+  for (const candidate of projection.contextTransfers) {
+    if (
+      candidate.type === "merge_back" &&
+      candidate.status === "pending" &&
+      candidate.targetThreadId === projection.thread.id
+    ) {
+      forks.add(candidate.sourceThreadId);
+    }
+  }
   return {
-    title: `Merged back from ${sourceThreadTitle ?? "a fork"}`,
-    description: "Its context will be included in your next message",
+    transfer,
+    forkCount: forks.size,
+    waitsForIdle: resolveActiveThreadRun(projection) !== null,
+  };
+}
+
+/** Copy for the composer notice shown while a merge-back waits for a send. */
+export function pendingMergeBackNotice(input: {
+  readonly sourceThreadTitle: string | null;
+  readonly forkCount: number;
+  readonly waitsForIdle: boolean;
+}) {
+  if (input.forkCount > 1) {
+    return {
+      blocked: true,
+      title: `Merged back from ${input.forkCount} forks`,
+      description: "Sending will fail while more than one merged fork is pending",
+    };
+  }
+  return {
+    blocked: false,
+    title: `Merged back from ${input.sourceThreadTitle ?? "a fork"}`,
+    description: input.waitsForIdle
+      ? "Its context will be included in the next message you send once this thread is idle"
+      : "Its context will be included in your next message",
   };
 }
 
