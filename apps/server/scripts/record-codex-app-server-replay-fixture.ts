@@ -14,10 +14,11 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import * as CodexClient from "effect-codex-app-server/client";
-import type * as CodexSchema from "effect-codex-app-server/schema";
+import * as CodexSchema from "effect-codex-app-server/schema";
 
 import {
   MESSAGE_STEERING_INITIAL_PROMPT,
@@ -352,6 +353,40 @@ function planCollaborationMode(model: string): CodexSchema.V2TurnStartParams__Co
     },
   };
 }
+
+// Same narrow decode as the V2 adapter's summary resolver, which is unexported.
+const CodexReasoningSummaryConfig = Schema.Struct({
+  config: Schema.Struct({
+    model_reasoning_summary: Schema.optionalKey(
+      Schema.NullOr(CodexSchema.V2TurnStartParams__ReasoningSummary),
+    ),
+  }),
+  origins: Schema.Record(
+    Schema.String,
+    Schema.Struct({ name: Schema.Struct({ type: Schema.String }) }),
+  ),
+});
+const decodeCodexReasoningSummaryConfig = Schema.decodeUnknownEffect(CodexReasoningSummaryConfig);
+
+/** Resolves `turn/start` summary from `config/read` exactly like the V2 adapter. */
+const resolveReasoningSummary = (
+  raw: Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">,
+  cwd: string | null,
+) =>
+  Effect.gen(function* () {
+    const response = yield* raw.request("config/read", { cwd });
+    const { config, origins } = yield* decodeCodexReasoningSummaryConfig(response);
+    const summary = config.model_reasoning_summary;
+    return summary == null || origins.model_reasoning_summary?.name.type === "packagedDefaults"
+      ? "auto"
+      : summary;
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Failed to read Codex reasoning summary config.", { cause }).pipe(
+        Effect.as("auto" as const),
+      ),
+    ),
+  );
 
 function scenarios(): ReadonlyArray<ReplayScenario> {
   return [
@@ -1381,12 +1416,11 @@ function runReplaySession({
       step: TurnReplayStep,
     ) =>
       Effect.gen(function* () {
-        const turnParams: TurnStartParams = {
+        const params: TurnStartParams = {
           approvalPolicy: "never",
           sandboxPolicy: { type: "dangerFullAccess" },
           cwd: process.cwd(),
           model,
-          summary: "detailed",
           approvalsReviewer: "user",
           ...(run.interactionMode === "plan"
             ? { collaborationMode: planCollaborationMode(model) }
@@ -1395,6 +1429,11 @@ function runReplaySession({
           ...step.turnOverrides,
           input: turnInput(step.prompt),
           threadId,
+        };
+        // Resolved per turn after overrides, so config/read sees the final cwd.
+        const turnParams: TurnStartParams = {
+          ...params,
+          summary: yield* resolveReasoningSummary(client.raw, params.cwd ?? null),
         };
 
         if (step.type === "steeredTurn") {

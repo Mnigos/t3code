@@ -703,6 +703,8 @@ export function buildCodexTurnStartParams(input: {
   readonly deviceToolsAvailable?: boolean;
   /** ChatGPT token sharing does not accept service tiers. */
   readonly omitServiceTier?: boolean;
+  /** From `resolveCodexReasoningSummary`; defaults to "auto". */
+  readonly reasoningSummary?: CodexSchema.V2TurnStartParams__ReasoningSummary;
 }) {
   return Effect.gen(function* () {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
@@ -758,9 +760,9 @@ export function buildCodexTurnStartParams(input: {
       ...(additionalContext ? { additionalContext } : {}),
       cwd: input.runtimePolicy.cwd,
       model: input.modelSelection.model,
-      // Model catalogues can default summaries to "none". Request them on every
-      // turn, including resumed threads, for T3's reasoning timeline.
-      summary: "detailed",
+      // Sent on every turn, including resumed threads: Codex keeps it for later
+      // turns, and model catalogues can default summaries to "none".
+      summary: input.reasoningSummary ?? "auto",
       // Always explicit: omitting this on resume leaves Codex's previous
       // reviewer sticky after switching away from Auto mode.
       approvalsReviewer: runtimeModeDefaults.approvalsReviewer,
@@ -953,6 +955,55 @@ const readCodexThreadHistoryMetadata = Effect.fn("CodexAdapterV2.readThreadHisto
       loaded: metadata.thread.status?.type !== "notLoaded",
     };
   },
+);
+
+/**
+ * Only the summary and its origin: the generated `config/read` response schema
+ * decodes the whole config, so an unrelated field from a newer Codex would
+ * discard the user's choice.
+ */
+const CodexReasoningSummaryConfig = Schema.Struct({
+  config: Schema.Struct({
+    model_reasoning_summary: Schema.optionalKey(
+      Schema.NullOr(CodexSchema.V2TurnStartParams__ReasoningSummary),
+    ),
+  }),
+  origins: Schema.Record(
+    Schema.String,
+    Schema.Struct({ name: Schema.Struct({ type: Schema.String }) }),
+  ),
+});
+const decodeCodexReasoningSummaryConfig = Schema.decodeUnknownEffect(CodexReasoningSummaryConfig);
+
+/**
+ * Reasoning summary for `turn/start`. A `model_reasoning_summary` from config
+ * (user or project `config.toml`, `-c` launch args, managed config) wins, since
+ * some providers reject summary levels. Otherwise "auto", the most detailed
+ * summary the model supports. Model catalogue defaults never appear in
+ * `config/read`; Codex's packaged defaults are not a user choice.
+ */
+const resolveCodexReasoningSummary = Effect.fn("CodexAdapterV2.resolveReasoningSummary")(
+  function* (
+    raw: Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">,
+    cwd: string | null,
+  ) {
+    const response = yield* raw.request("config/read", { cwd });
+    const { config, origins } = yield* decodeCodexReasoningSummaryConfig(response);
+    const summary = config.model_reasoning_summary;
+    // Built-in defaults fill `config` without an `origins` entry.
+    const origin = origins.model_reasoning_summary?.name.type;
+    return summary == null || origin === undefined || origin === "packagedDefaults"
+      ? "auto"
+      : summary;
+  },
+  // Older app servers lack `config/read`, and a silent one must not stall the
+  // turn; never fail it over this.
+  Effect.timeout("5 seconds"),
+  Effect.catch((cause) =>
+    Effect.logWarning("Failed to read Codex reasoning summary config.", { cause }).pipe(
+      Effect.as("auto" as const),
+    ),
+  ),
 );
 
 export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRollbackTurnCount")(
@@ -5546,6 +5597,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
                 deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
                 omitServiceTier: adapterOptions.resolveRuntime !== undefined,
+                // Read per turn: Codex rereads config.toml on every `config/read`,
+                // so edits apply without restarting the session.
+                reasoningSummary: yield* resolveCodexReasoningSummary(
+                  client.raw,
+                  turnInput.runtimePolicy.cwd,
+                ),
               });
               yield* Ref.update(pendingRootTurns, (current) => {
                 const updated = new Map(current);
