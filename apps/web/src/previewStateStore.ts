@@ -254,6 +254,13 @@ export function applyBackgroundPreviewClose(
   if (event.type !== "closed") return;
   const ref = { environmentId, threadId: ThreadId.make(event.threadId) };
   if (!appAtomRegistry.get(activePreviewThreadKeysAtom).keys.has(scopedThreadKey(ref))) return;
+  // A new server epoch means the stored tabs died with the old process, and an
+  // unmounted thread has no sync to re-list them.
+  const { serverEpoch } = readThreadPreviewState(ref);
+  if (serverEpoch !== null && serverEpoch !== event.serverEpoch) {
+    clearThreadPreviewState(ref);
+    return;
+  }
   applyPreviewServerEvent(ref, event);
 }
 
