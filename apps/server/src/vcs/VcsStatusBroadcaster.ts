@@ -467,7 +467,11 @@ export const make = Effect.gen(function* () {
         }
         const previousRemote = (yield* getCachedStatus(cwd))?.remote?.value;
         const remote = yield* workflow.remoteStatus({ cwd }, options);
-        const pulled = yield* maybeAutoPull(cwd, remote, options?.policyCwds ?? [cwd]);
+        // Like refreshStatus: no automatic pull when nothing was fetched.
+        const pulled =
+          options?.refreshUpstream === false
+            ? null
+            : yield* maybeAutoPull(cwd, remote, options?.policyCwds ?? [cwd]);
         if (pulled !== null) return pulled.remote;
         // Local status holds the Changes totals, which compare against remote refs. A fetch can
         // move them with no local trigger (a push from a terminal, a PR merged on the host), so

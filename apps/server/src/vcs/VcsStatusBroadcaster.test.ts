@@ -262,6 +262,63 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(testLayer));
   });
 
+  it.effect("does not pull automatically on the initial poll when the interval is zero", () => {
+    let pullCalls = 0;
+    // Settles on the first remote update or pull, whichever the poll reaches.
+    const settled = Deferred.makeUnsafe<void>();
+    const behindRemote: VcsStatusRemoteResult = { ...baseRemoteStatus, behindCount: 2 };
+    const testLayer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provideMerge(NodeServices.layer),
+      Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
+          isEnabled: () => Effect.succeed(true),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          localStatus: () =>
+            Effect.succeed({ ...baseLocalStatus, isDefaultRef: true, refName: "main" }),
+          remoteStatus: () => Effect.succeed(behindRemote),
+          invalidateLocalStatus: () => Effect.void,
+          invalidateRemoteStatus: () => Effect.void,
+          invalidateStatus: () => Effect.void,
+          pullCurrentBranch: () =>
+            Effect.sync(() => {
+              pullCalls += 1;
+              return { status: "pulled" as const, refName: "main", upstreamRef: "origin/main" };
+            }).pipe(Effect.tap(() => Deferred.succeed(settled, undefined))),
+        }),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const scope = yield* Scope.make();
+      let remoteUpdated: VcsStatusStreamEvent | undefined;
+      yield* Stream.runForEach(
+        broadcaster.streamStatus(
+          { cwd: "/repo" },
+          { automaticRemoteRefreshInterval: Effect.succeed(Duration.zero) },
+        ),
+        (event) => {
+          if (event._tag !== "remoteUpdated") return Effect.void;
+          remoteUpdated = event;
+          return Deferred.succeed(settled, undefined);
+        },
+      ).pipe(Effect.forkIn(scope));
+
+      yield* Deferred.await(settled);
+      assert.equal(pullCalls, 0);
+      assert.deepStrictEqual(remoteUpdated, {
+        _tag: "remoteUpdated",
+        remote: behindRemote,
+      } satisfies VcsStatusStreamEvent);
+
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(Effect.provide(testLayer));
+  });
+
   it.effect("reuses the cached VCS status across repeated reads", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
