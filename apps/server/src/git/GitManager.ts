@@ -2384,17 +2384,20 @@ export const make = Effect.gen(function* () {
         // like a checkout in a terminal, and refuses a diverged one. The refresh below catches up
         // providers that only switch to an existing branch, and whatever it cannot move without
         // losing work is reported as not on the pull request head.
-        yield* (yield* sourceControlProvider(input.cwd))
+        const refusedCheckout = yield* (yield* sourceControlProvider(input.cwd))
           .checkoutChangeRequest({
             cwd: input.cwd,
             reference: normalizedReference,
           })
           .pipe(
+            Effect.as(null),
             // A refused fast-forward (local commits, or edits in the way) can fail the checkout
             // after it already switched to the branch. That checkout is the pull request's, just
-            // not at its head, so it is handed back and the refresh reports it. Only for a
-            // same-repository head: a fork's head branch may share its name with the user's own
-            // branch (a fork PR from `main`), which must keep its tracking config untouched.
+            // not at its head, so it is handed back and the refresh reports it — provided the head
+            // can be fetched below, which tells a refusal from a network or authentication
+            // failure. Only for a same-repository head: a fork's head branch may share its name
+            // with the user's own branch (a fork PR from `main`), which must keep its tracking
+            // config untouched.
             Effect.catch((error) =>
               Effect.gen(function* () {
                 const details = yield* gitCore.statusDetails(input.cwd);
@@ -2404,10 +2407,7 @@ export const make = Effect.gen(function* () {
                 ) {
                   return yield* error;
                 }
-                yield* Effect.logWarning(
-                  "GitManager.preparePullRequestThread checkout stopped on the pull request branch",
-                  { cwd: input.cwd, headBranch: pullRequest.headBranch, cause: error },
-                );
+                return error;
               }),
             ),
           );
@@ -2420,6 +2420,15 @@ export const make = Effect.gen(function* () {
           },
           details.branch ?? pullRequest.headBranch,
         );
+        if (refusedCheckout !== null) {
+          if (head === null) {
+            return yield* refusedCheckout;
+          }
+          yield* Effect.logWarning(
+            "GitManager.preparePullRequestThread checkout stopped on the pull request branch",
+            { cwd: input.cwd, headBranch: pullRequest.headBranch, cause: refusedCheckout },
+          );
+        }
         // The head comes only from the branch just fetched for the pull request, never from
         // `refs/pull/<n>/head` on the primary remote: when `origin` is the user's fork, its pull
         // request of that number is somebody else's. This repository is where the user works, so
