@@ -279,6 +279,56 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
     );
 
     it.effect.skipIf(!symlinksSupported)(
+      "rejects a local SQLite maintenance lock directory without deleting it",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowHome = yield* makeTempDir("t3code-codex-shadow-");
+          const shadowLock = path.join(shadowHome, ".sqlite-maintenance.lock");
+          yield* writeTextFile(path.join(sharedHome, ".sqlite-maintenance.lock"), "");
+          yield* writeTextFile(path.join(shadowLock, "keep.txt"), "private data");
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+          );
+
+          const error = yield* materializeCodexShadowHome(layout).pipe(Effect.flip);
+
+          expect(error).toBeInstanceOf(CodexShadowHomeEntryConflictError);
+          expect(error).toMatchObject({ entryName: ".sqlite-maintenance.lock" });
+          expect(NodeFS.lstatSync(shadowLock).isDirectory()).toBe(true);
+          expect(yield* fileSystem.readFileString(path.join(shadowLock, "keep.txt"))).toBe(
+            "private data",
+          );
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)(
+      "rejects a non-empty local SQLite maintenance lock without changing it",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowHome = yield* makeTempDir("t3code-codex-shadow-");
+          const shadowLock = path.join(shadowHome, ".sqlite-maintenance.lock");
+          yield* writeTextFile(path.join(sharedHome, ".sqlite-maintenance.lock"), "");
+          yield* writeTextFile(shadowLock, "private data");
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+          );
+
+          const error = yield* materializeCodexShadowHome(layout).pipe(Effect.flip);
+
+          expect(error).toBeInstanceOf(CodexShadowHomeEntryConflictError);
+          expect(error).toMatchObject({ entryName: ".sqlite-maintenance.lock" });
+          expect(NodeFS.lstatSync(shadowLock).isFile()).toBe(true);
+          expect(yield* fileSystem.readFileString(shadowLock)).toBe("private data");
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)(
       "accepts Codex-created shadow-local runtime directories",
       () =>
         Effect.gen(function* () {

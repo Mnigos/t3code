@@ -36,8 +36,15 @@ const SHADOW_LOCAL_ENTRY_NAMES = new Set(["log", "memories", "tmp"]);
 // with the shared link instead of failing. A Codex process that survives keeps its lock on the
 // deleted file until it exits; later opens all converge on the shared lock.
 // `.sqlite-maintenance.lock` elects one SQLite cleanup worker per home; the databases it guards
-// are already shared, so every account must use the shared lock.
-const REPLACEABLE_SHARED_RUNTIME_ENTRIES = new Set(["mcp-oauth-locks", ".sqlite-maintenance.lock"]);
+// are already shared, so every account must use the shared lock. Each entry is replaced only when
+// the shadow copy has the shape Codex creates (Codex never writes to the lock file); any other
+// shape is a conflict.
+const REPLACEABLE_SHARED_RUNTIME_ENTRIES = new Map<string, (info: FileSystem.File.Info) => boolean>(
+  [
+    ["mcp-oauth-locks", (info) => info.type === "Directory"],
+    [".sqlite-maintenance.lock", (info) => info.type === "File" && info.size === 0n],
+  ],
+);
 
 function resolveHomePath(path: Path.Path, value: string | undefined): string {
   const expanded =
@@ -80,7 +87,14 @@ export class CodexShadowHomeFileSystemError extends Schema.TaggedError<CodexShad
   "CodexShadowHomeFileSystemError",
   {
     ...CodexShadowHomeContext,
-    operation: Schema.Literals(["readLink", "makeDirectory", "readDirectory", "remove", "symlink"]),
+    operation: Schema.Literals([
+      "readLink",
+      "stat",
+      "makeDirectory",
+      "readDirectory",
+      "remove",
+      "symlink",
+    ]),
     path: Schema.String,
     targetPath: Schema.optional(Schema.String),
     entryName: Schema.optional(Schema.String),
@@ -247,9 +261,23 @@ const ensureSymlink = Effect.fn("CodexHomeLayout.ensureSymlink")(function* (inpu
         }),
     }),
   );
+  const statLink = input.fileSystem.stat(link).pipe(
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        new CodexShadowHomeFileSystemError({
+          sharedHomePath: input.sharedHomePath,
+          effectiveHomePath: input.effectiveHomePath,
+          operation: "stat",
+          path: link,
+          entryName: input.entryName,
+          cause,
+        }),
+    }),
+  );
 
   if (state._tag === "NotSymlink") {
-    if (!REPLACEABLE_SHARED_RUNTIME_ENTRIES.has(input.entryName)) {
+    const isReplaceable = REPLACEABLE_SHARED_RUNTIME_ENTRIES.get(input.entryName);
+    if (!isReplaceable || !isReplaceable(yield* statLink)) {
       return yield* new CodexShadowHomeEntryConflictError({
         sharedHomePath: input.sharedHomePath,
         effectiveHomePath: input.effectiveHomePath,
