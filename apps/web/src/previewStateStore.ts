@@ -419,10 +419,13 @@ export function applyPreviewDesktopState(
 /**
  * Forget every preview of a deleted thread. Its sync atom is usually gone by
  * the time the server's `closed` events arrive, so the desktop host would keep
- * the guests alive otherwise.
+ * the guests alive otherwise. Closing each tab keeps the revision guards and
+ * suppression, so an in-flight list response cannot bring the tabs back.
  */
 export function clearThreadPreviewState(ref: ScopedThreadRef): void {
-  updateThreadPreviewState(ref, () => EMPTY_THREAD_PREVIEW_STATE);
+  for (const tabId of Object.keys(readThreadPreviewState(ref).sessions)) {
+    beginPreviewSessionClose(ref, tabId);
+  }
 }
 
 export function beginPreviewSessionClose(ref: ScopedThreadRef, tabId: string): void {
