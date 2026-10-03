@@ -452,7 +452,7 @@ export interface ClaudeAgentSdkLoggedQueryOptions {
   readonly cwd?: ClaudeAgentSdkQueryOptions["cwd"];
   readonly allowedTools?: ClaudeAgentSdkQueryOptions["allowedTools"];
   readonly disallowedTools?: ClaudeAgentSdkQueryOptions["disallowedTools"];
-  readonly settings?: ClaudeAgentSdkQueryOptions["settings"];
+  readonly settingsKeys?: ReadonlyArray<string>;
   readonly effort?: ClaudeAgentSdkQueryOptions["effort"];
   readonly includePartialMessages?: true;
   readonly pathToClaudeCodeExecutable?: ClaudeAgentSdkQueryOptions["pathToClaudeCodeExecutable"];
@@ -567,7 +567,11 @@ export function loggedClaudeQueryOptions(
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.allowedTools === undefined ? {} : { allowedTools: options.allowedTools }),
     ...(options.disallowedTools === undefined ? {} : { disallowedTools: options.disallowedTools }),
-    ...(options.settings === undefined ? {} : { settings: options.settings }),
+    // Settings carry the user's --settings launch arg, whose `env` or
+    // `apiKeyHelper` can hold secrets, so only the key names are logged.
+    ...(typeof options.settings === "object"
+      ? { settingsKeys: Object.keys(options.settings) }
+      : {}),
     ...(options.effort === undefined ? {} : { effort: options.effort }),
     ...(options.includePartialMessages === true ? { includePartialMessages: true } : {}),
     ...(options.pathToClaudeCodeExecutable === undefined

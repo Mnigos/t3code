@@ -890,6 +890,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
       env: {
         ANTHROPIC_API_KEY: "secret",
       },
+      settings: { env: { ANTHROPIC_API_KEY: "secret launch setting" }, fastMode: true },
       extraArgs: {
         "append-system-prompt": "secret launch prompt",
       },
@@ -911,14 +912,14 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
       permissionMode: "default",
       sessionId: "native-thread-1",
       cwd: "/workspace",
+      settingsKeys: ["env", "fastMode"],
       hasCanUseTool: true,
       hasEnvironment: true,
       hasExtraArgs: true,
     });
-    assert.notInclude(
-      JSON.stringify(ClaudeAdapterV2.loggedClaudeQueryOptions(options)),
-      "secret launch prompt",
-    );
+    const logged = JSON.stringify(ClaudeAdapterV2.loggedClaudeQueryOptions(options));
+    assert.notInclude(logged, "secret launch prompt");
+    assert.notInclude(logged, "secret launch setting");
   });
 });
 
