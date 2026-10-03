@@ -17,6 +17,7 @@ import {
   applyPreviewServerSnapshot,
   beginPreviewSessionClose,
   cancelPreviewSessionClose,
+  clearThreadPreviewState,
   previewStateAtom,
   readThreadPreviewState,
   reconcilePreviewServerSessions,
@@ -557,6 +558,17 @@ describe("previewStateStore (single-tab)", () => {
     expect(state.sessions).toEqual({});
     expect(state.activeTabId).toBeNull();
     expect(state.snapshot).toBeNull();
+  });
+
+  it("keeps a cleared thread's tabs closed when a stale list response lands", () => {
+    const first = makeSnapshot({ tabId: "tab_a" });
+    const second = makeSnapshot({ tabId: "tab_b" });
+    reconcilePreviewServerSessions(ref, { sessions: [first, second], serverEpoch, revision: 1 });
+
+    clearThreadPreviewState(ref);
+    reconcilePreviewServerSessions(ref, { sessions: [first, second], serverEpoch, revision: 1 });
+
+    expect(readThreadPreviewState(ref).sessions).toEqual({});
   });
 
   it("ignores a list response older than the latest server event", () => {
