@@ -399,6 +399,15 @@ export function applyPreviewDesktopState(
   });
 }
 
+/**
+ * Forget every preview of a deleted thread. Its sync atom is usually gone by
+ * the time the server's `closed` events arrive, so the desktop host would keep
+ * the guests alive otherwise.
+ */
+export function clearThreadPreviewState(ref: ScopedThreadRef): void {
+  updateThreadPreviewState(ref, () => EMPTY_THREAD_PREVIEW_STATE);
+}
+
 export function beginPreviewSessionClose(ref: ScopedThreadRef, tabId: string): void {
   updateThreadPreviewState(ref, (current) => {
     const suppressedTabIds = new Set(current.suppressedTabIds);
