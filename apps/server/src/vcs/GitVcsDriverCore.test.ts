@@ -3,8 +3,10 @@ import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { assert, it, describe } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -2925,6 +2927,383 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* Fiber.join(removal);
 
         assert.equal(yield* fileSystem.exists(worktreePath), false);
+      }),
+    );
+
+    // Runs the first real `git worktree add` to completion, then either never
+    // reports its exit (so the add times out) or reports a non-zero exit.
+    const makeFailingWorktreeAddDriver = (failure: "timeout" | "exit", failRemoval = false) =>
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const addExited = yield* Deferred.make<void>();
+        const intercepted = yield* Ref.make(false);
+        const failedRemovals = yield* Ref.make(0);
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if (
+              failRemoval &&
+              ChildProcess.isStandardCommand(command) &&
+              command.args[0] === "worktree" &&
+              command.args[1] === "remove"
+            ) {
+              yield* Ref.update(failedRemovals, (count) => count + 1);
+              return makeNonRepositoryHandle();
+            }
+            const handle = yield* delegate.spawn(command);
+            const isAdd =
+              ChildProcess.isStandardCommand(command) &&
+              command.args.includes("worktree") &&
+              command.args.includes("add");
+            if (!isAdd || (yield* Ref.getAndSet(intercepted, true))) return handle;
+            assert.equal(yield* handle.exitCode, 0);
+            return failure === "exit"
+              ? makeNonRepositoryHandle()
+              : ChildProcessSpawner.makeHandle({
+                  ...handle,
+                  exitCode: Deferred.succeed(addExited, undefined).pipe(
+                    Effect.andThen(Effect.never),
+                  ),
+                });
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ServerConfigLayer),
+        );
+        return { driver, addExited, failedRemovals };
+      });
+
+    const assertWorktreeRolledBack = (cwd: string, worktreePath: string, branch: string) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), worktreePath);
+        assert.equal(yield* git(cwd, ["branch", "--list", branch]), "");
+      });
+
+    it.effect("rolls back a worktree add that timed out so a retry succeeds", () =>
+      Effect.gen(function* () {
+        const { driver, addExited } = yield* makeFailingWorktreeAddDriver("timeout");
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreePath = (yield* Path.Path).join(yield* makeTmpDir("git-worktrees-"), "slow");
+        const input = { cwd, path: worktreePath, refName: initialBranch, newRefName: "t3/slow" };
+
+        const creation = yield* driver
+          .createWorktree(input)
+          .pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(addExited);
+        yield* TestClock.adjust("301 seconds");
+        const error = yield* Fiber.join(creation);
+
+        assert.equal(error.detail, "Git command timed out.");
+        yield* assertWorktreeRolledBack(cwd, worktreePath, "t3/slow");
+        const retried = yield* driver.createWorktree(input);
+        assert.equal(retried.worktree.path, worktreePath);
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "t3/slow");
+      }),
+    );
+
+    it.effect("rolls back a worktree add that exited with an error", () =>
+      Effect.gen(function* () {
+        const { driver } = yield* makeFailingWorktreeAddDriver("exit");
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreePath = (yield* Path.Path).join(yield* makeTmpDir("git-worktrees-"), "fails");
+        const input = { cwd, path: worktreePath, refName: initialBranch, newRefName: "t3/fails" };
+
+        const error = yield* driver.createWorktree(input).pipe(Effect.flip);
+
+        assert.equal(error.detail, "git worktree add failed");
+        assert.equal(error.exitCode, 128);
+        yield* assertWorktreeRolledBack(cwd, worktreePath, "t3/fails");
+        const retried = yield* driver.createWorktree(input);
+        assert.equal(retried.worktree.path, worktreePath);
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "t3/fails");
+      }),
+    );
+
+    it.effect("rolls back a worktree add interrupted by its caller so a retry succeeds", () =>
+      Effect.gen(function* () {
+        const { driver, addExited } = yield* makeFailingWorktreeAddDriver("timeout");
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreePath = (yield* Path.Path).join(
+          yield* makeTmpDir("git-worktrees-"),
+          "cancelled",
+        );
+        const input = {
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "t3/cancelled",
+        };
+
+        const creation = yield* driver
+          .createWorktree(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(addExited);
+        yield* Fiber.interrupt(creation);
+        const exit = yield* Fiber.await(creation);
+
+        assert.isTrue(Exit.isFailure(exit));
+        if (Exit.isFailure(exit)) assert.isTrue(Cause.hasInterruptsOnly(exit.cause));
+        yield* assertWorktreeRolledBack(cwd, worktreePath, "t3/cancelled");
+        const retried = yield* driver.createWorktree(input);
+        assert.equal(retried.worktree.path, worktreePath);
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "t3/cancelled");
+      }),
+    );
+
+    it.effect("prunes and deletes the new branch when rollback worktree removal fails", () =>
+      Effect.gen(function* () {
+        const { driver, failedRemovals } = yield* makeFailingWorktreeAddDriver("exit", true);
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreePath = (yield* Path.Path).join(
+          yield* makeTmpDir("git-worktrees-"),
+          "remove-fails",
+        );
+        const input = {
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "t3/remove-fails",
+        };
+
+        const warnings: string[] = [];
+        const logger = Logger.make(({ logLevel, message }) => {
+          if (logLevel === "Warn") warnings.push(String(message));
+        });
+        const error = yield* driver
+          .createWorktree(input)
+          .pipe(Effect.flip, Effect.provide(Logger.layer([logger], { mergeWithExisting: true })));
+
+        assert.equal(error.detail, "git worktree add failed");
+        assert.equal(error.exitCode, 128);
+        yield* assertWorktreeRolledBack(cwd, worktreePath, "t3/remove-fails");
+        assert.equal(yield* Ref.get(failedRemovals), 1);
+        assert.isTrue(warnings.some((message) => message.includes("remove worktree failed")));
+        const retried = yield* driver.createWorktree(input);
+        assert.equal(retried.worktree.path, worktreePath);
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "t3/remove-fails");
+      }),
+    );
+
+    // Holds the first `count` worktree adds until the test releases each one.
+    const makeGatedWorktreeAddDriver = (count = 2) =>
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const makeGate = Effect.all({
+          started: Deferred.make<void>(),
+          release: Deferred.make<void>(),
+          exited: Deferred.make<void>(),
+        });
+        const gates = yield* Effect.all(Array.from({ length: count }, () => makeGate));
+        const adds = yield* Ref.make(0);
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            const isAdd =
+              ChildProcess.isStandardCommand(command) &&
+              command.args.includes("worktree") &&
+              command.args.includes("add");
+            const gate = isAdd ? gates[yield* Ref.getAndUpdate(adds, (n) => n + 1)] : undefined;
+            if (gate) {
+              yield* Deferred.succeed(gate.started, undefined);
+              yield* Deferred.await(gate.release);
+            }
+            const handle = yield* delegate.spawn(command);
+            return gate
+              ? ChildProcessSpawner.makeHandle({
+                  ...handle,
+                  exitCode: handle.exitCode.pipe(
+                    Effect.tap(() => Deferred.succeed(gate.exited, undefined)),
+                  ),
+                })
+              : handle;
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ServerConfigLayer),
+        );
+        return { driver, gates, winnerGate: gates[0]!, loserGate: gates[1]! };
+      });
+
+    it.effect("keeps the winner's worktree when a concurrent checkout of it fails", () =>
+      Effect.gen(function* () {
+        const { driver, winnerGate, loserGate } = yield* makeGatedWorktreeAddDriver();
+        const loserWaiting = yield* Deferred.make<void>();
+        const waitLogger = Logger.make(({ message }) => {
+          if (String(message).includes("waiting for another checkout")) {
+            Deferred.doneUnsafe(loserWaiting, Effect.void);
+          }
+        });
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "contended");
+        const input = {
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "t3/contended",
+        };
+
+        const winner = yield* driver
+          .createWorktree(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(winnerGate.started);
+        const loser = yield* driver
+          .createWorktree(input)
+          .pipe(
+            Effect.flip,
+            Effect.provide(Logger.layer([waitLogger], { mergeWithExisting: true })),
+            Effect.forkChild({ startImmediately: true }),
+          );
+        // Unserialized, the loser snapshots the still-absent branch and path and
+        // reaches its own add while the winner's add is held.
+        yield* Effect.raceFirst(Deferred.await(loserWaiting), Deferred.await(loserGate.started));
+        yield* Deferred.succeed(winnerGate.release, undefined);
+        yield* Fiber.join(winner);
+        const branchSha = yield* git(worktreePath, ["rev-parse", "HEAD"]);
+        yield* writeTextFile(worktreePath, "winner-only.txt", "winner\n");
+        yield* Deferred.succeed(loserGate.release, undefined);
+        const error = yield* Fiber.join(loser);
+
+        assert.equal(error.detail, "git worktree add failed");
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, "winner-only.txt")),
+          "winner\n",
+        );
+        assert.include(yield* git(cwd, ["worktree", "list", "--porcelain"]), worktreePath);
+        assert.equal(yield* git(cwd, ["rev-parse", "refs/heads/t3/contended"]), branchSha);
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "t3/contended");
+      }),
+    );
+
+    it.effect.each(["path", "branch"] as const)(
+      "releases an interrupted waiter on the %s lock without releasing the holder",
+      (target) =>
+        Effect.gen(function* () {
+          const { driver, winnerGate, loserGate } = yield* makeGatedWorktreeAddDriver();
+          const waiting = yield* Queue.unbounded<void>();
+          const waitLogger = Logger.make(({ message }) => {
+            if (String(message).includes("waiting for another checkout")) {
+              Queue.offerUnsafe(waiting, undefined);
+            }
+          });
+          const cwd = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          const pathService = yield* Path.Path;
+          const root = yield* makeTmpDir("git-worktrees-");
+          const input = {
+            cwd,
+            path: pathService.join(root, "holder"),
+            refName: initialBranch,
+            newRefName: "t3/holder",
+          };
+          const holder = yield* driver
+            .createWorktree(input)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(winnerGate.started);
+          const contenderInput =
+            target === "path"
+              ? { cwd, path: input.path, refName: initialBranch }
+              : { ...input, path: pathService.join(root, "waiter") };
+          const contender = driver
+            .createWorktree(contenderInput)
+            .pipe(Effect.provide(Logger.layer([waitLogger], { mergeWithExisting: true })));
+          const cancelled = yield* contender.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Queue.take(waiting);
+          yield* Fiber.interrupt(cancelled);
+          const exit = yield* Fiber.await(cancelled);
+          assert.isTrue(Exit.isFailure(exit));
+          if (Exit.isFailure(exit)) assert.isTrue(Cause.hasInterruptsOnly(exit.cause));
+          assert.isFalse(yield* Deferred.isDone(loserGate.started));
+
+          // Cancellation must neither strand the next waiter nor let it bypass
+          // the holder. The branch case also has to release its outer path lock.
+          const next = yield* contender.pipe(
+            Effect.flip,
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* Effect.raceFirst(Queue.take(waiting), Deferred.await(loserGate.started));
+          assert.isFalse(yield* Deferred.isDone(loserGate.started));
+          yield* Deferred.succeed(winnerGate.release, undefined);
+          yield* Fiber.join(holder);
+          yield* Deferred.await(loserGate.started);
+          yield* Deferred.succeed(loserGate.release, undefined);
+          assert.equal((yield* Fiber.join(next)).detail, "git worktree add failed");
+          assert.equal(yield* git(input.path, ["branch", "--show-current"]), "t3/holder");
+          assert.include(yield* git(cwd, ["worktree", "list", "--porcelain"]), input.path);
+        }),
+    );
+
+    it.effect("runs checkouts of different worktree targets in parallel", () =>
+      Effect.gen(function* () {
+        const { driver, gates } = yield* makeGatedWorktreeAddDriver(7);
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreesRoot = yield* makeTmpDir("git-worktrees-");
+        const names = Array.from({ length: gates.length }, (_, i) => `parallel-${i}`);
+        const checkouts = yield* Effect.forEach(names, (name) =>
+          driver
+            .createWorktree({
+              cwd,
+              path: pathService.join(worktreesRoot, name),
+              refName: initialBranch,
+              newRefName: `t3/${name}`,
+            })
+            .pipe(Effect.forkChild({ startImmediately: true })),
+        );
+        // All seven adds are in flight before any is released.
+        for (const gate of gates) yield* Deferred.await(gate.started);
+        // Git 2.39 can fail while reading another add's unfinished commondir.
+        // Having proved all seven reached spawn, finish their Git processes one
+        // at a time so this test measures driver concurrency, not that Git race.
+        for (const gate of gates) {
+          yield* Deferred.succeed(gate.release, undefined);
+          yield* Deferred.await(gate.exited);
+        }
+        for (const checkout of checkouts) yield* Fiber.join(checkout);
+        for (const name of names) {
+          assert.equal(
+            yield* git(pathService.join(worktreesRoot, name), ["branch", "--show-current"]),
+            `t3/${name}`,
+          );
+        }
+      }),
+    );
+
+    it.effect("keeps a pre-existing branch and path when a worktree add fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "taken");
+        yield* writeTextFile(worktreePath, "keep.txt", "keep\n");
+        yield* git(cwd, ["branch", "t3/taken"]);
+        const branchSha = yield* git(cwd, ["rev-parse", "refs/heads/t3/taken"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "t3/taken",
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(yield* git(cwd, ["rev-parse", "refs/heads/t3/taken"]), branchSha);
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, "keep.txt")),
+          "keep\n",
+        );
       }),
     );
 
