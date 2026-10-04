@@ -2806,6 +2806,91 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("a user steer does not cut a foreground subagent short", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const AGENT_TOOL_USE_ID = "toolu_01SteerForegroundAgent";
+        let interrupts = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Effect.sync(() => {
+            interrupts++;
+          }),
+        });
+        const turn = yield* startSteerTarget(harness, { runningBash: false });
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: "claude-sonnet-4-6",
+              id: "msg_steer_foreground_agent",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: AGENT_TOOL_USE_ID,
+                  name: "Agent",
+                  input: { description: "Audit recent commits", prompt: "Audit them." },
+                },
+              ],
+            },
+            parent_tool_use_id: null,
+            uuid: "00000000-0000-4000-8000-000000000950",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...makeSubagentTaskStartedFrame({
+              taskId: "task-steer-foreground-agent",
+              toolUseId: AGENT_TOOL_USE_ID,
+              uuid: "00000000-0000-4000-8000-000000000951",
+            }),
+            is_backgrounded: false,
+          }),
+        );
+        // The subagent's own Bash call is the only open tool call.
+        for (const frame of makeSubagentAssistantFrames({
+          parentToolUseId: AGENT_TOOL_USE_ID,
+          uuid: "00000000-0000-4000-8000-000000000952",
+          bashToolUseId: "toolu_01SteerSubagentBash",
+        })) {
+          yield* harness.offerAndWait(frame);
+        }
+
+        yield* turn.steer();
+        assert.lengthOf(harness.offeredMessages, 2);
+        assert.equal(interrupts, 0);
+
+        // A root-thread call opened beside it is cut short as usual.
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: "claude-sonnet-4-6",
+              id: "msg_steer_root_bash",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: STEER_BASH_TOOL_USE_ID,
+                  name: "Bash",
+                  input: { command: "curl --silent http://127.0.0.1:9/slow" },
+                },
+              ],
+            },
+            parent_tool_use_id: null,
+            uuid: "00000000-0000-4000-8000-000000000953",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* turn.steer("Another correction.");
+        assert.equal(interrupts, 1);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("a user steer does not interrupt while an approval waits on the user", () =>
     Effect.scoped(
       Effect.gen(function* () {

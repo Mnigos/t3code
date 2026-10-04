@@ -7413,9 +7413,11 @@ export function makeClaudeAdapterV2(
             // Claude holds a `now` message until a running tool returns. As in
             // Claude Code's Esc then send, interrupt (without closing), then
             // offer: the abort is absorbed as active steering and the steer
-            // runs after it. Only a user's own message may cut a tool short.
+            // runs after it. Only a user's own message may cut a tool short,
+            // and only a root-thread one: a subagent's calls (no run) would
+            // take the whole subagent down with them.
             if (
-              currentTurn.toolCalls.size > 0 &&
+              [...currentTurn.toolCalls.values()].some((toolCall) => toolCall.runId !== null) &&
               turnInput.message.createdBy === "user" &&
               turnInput.message.scheduledTaskId === undefined &&
               (yield* Ref.get(toolCallbacksInFlight)) === 0
