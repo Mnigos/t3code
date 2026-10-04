@@ -1401,6 +1401,25 @@ export const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => "origin"),
       );
 
+  // The target remote's repository, or the OWNER/REPO that `gh repo set-default`
+  // recorded in its gh-resolved key (`base` means the remote itself).
+  const resolveTargetRepositoryContext = Effect.fn("resolveTargetRepositoryContext")(function* (
+    cwd: string,
+    remoteName: string | null,
+  ) {
+    const context = yield* resolveRemoteRepositoryContext(cwd, remoteName);
+    if (!remoteName) return context;
+    const resolved = yield* readConfigValueNullable(cwd, `remote.${remoteName}.gh-resolved`);
+    const [owner, name, ...rest] = resolved?.trim().split("/") ?? [];
+    if (!owner || !name || rest.length > 0) return context;
+    const host = context.remoteUrlKey?.split("/")[0];
+    return {
+      remoteUrlKey: host ? `${host}/${owner}/${name}`.toLowerCase() : context.remoteUrlKey,
+      repositoryNameWithOwner: `${owner}/${name}`,
+      ownerLogin: owner,
+    };
+  });
+
   const resolvePrLookupRepositoryIdentity = Effect.fn("resolvePrLookupRepositoryIdentity")(
     function* (cwd: string, branch: string, remoteNameOverride?: string) {
       const remoteName =
@@ -1409,7 +1428,7 @@ export const make = Effect.gen(function* () {
       const [headRemote, targetRemote] = yield* Effect.all(
         [
           resolveRemoteRepositoryContext(cwd, remoteName),
-          resolveRemoteRepositoryContext(cwd, targetRemoteName),
+          resolveTargetRepositoryContext(cwd, targetRemoteName),
         ],
         { concurrency: "unbounded" },
       );
@@ -1440,7 +1459,7 @@ export const make = Effect.gen(function* () {
     const [remoteRepository, targetRepository] = yield* Effect.all(
       [
         resolveRemoteRepositoryContext(cwd, remoteName),
-        resolveRemoteRepositoryContext(cwd, targetRemoteName),
+        resolveTargetRepositoryContext(cwd, targetRemoteName),
       ],
       { concurrency: "unbounded" },
     );

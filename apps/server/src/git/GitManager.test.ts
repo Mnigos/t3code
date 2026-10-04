@@ -3896,6 +3896,38 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
   );
 
   it.effect(
+    "keeps fork PR selectors when gh set-default points the only remote at its parent",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "dev"]);
+        const forkDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "fork", forkDir]);
+        yield* runGit(repoDir, ["push", "fork", "main"]);
+        yield* runGit(repoDir, ["push", "-u", "fork", "dev"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "fork",
+          "https://github.com/contributor/demo.git",
+          forkDir,
+        );
+        yield* runGit(repoDir, ["config", "remote.fork.gh-resolved", "acme/demo"]);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "changes.txt"), "change\n");
+
+        const { manager, ghCalls } = yield* makeManager();
+        const created = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit_push_pr",
+        });
+        expect(created.pr.status).toBe("created");
+        expect(
+          ghCalls.some((call) => call.startsWith("pr create --base main --head contributor:dev ")),
+        ).toBe(true);
+      }),
+  );
+
+  it.effect(
     "returns the correct existing PR when a slash remote checks out to a synthetic local alias",
     () =>
       Effect.gen(function* () {
