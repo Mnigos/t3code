@@ -4,12 +4,14 @@ import {
   ORCHESTRATION_PROTOCOL_HEADER,
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
   ProjectId,
+  ThreadId,
   type AuthSessionState,
   type OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadBoundedSnapshot,
   type OrchestrationV2ThreadHistoryPage,
 } from "@t3tools/contracts";
+import { normalizeDpopHtu } from "@t3tools/shared/dpopCommon";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -241,7 +243,64 @@ const LOADERS: ReadonlyArray<{
   },
 ];
 
+// Delegated-task ids carry `:` and an already percent-encoded command id.
+const THREAD_IDS = [
+  {
+    threadId: ThreadId.make("thread:delegated-task:command%3Amcp%3Arequest-1"),
+    pathSegment: "thread%3Adelegated-task%3Acommand%253Amcp%253Arequest-1",
+  },
+  {
+    threadId: ThreadId.make("6f1c2a9e-4b7d-4e1a-9c3f-2d8b5a7e0c41"),
+    pathSegment: "6f1c2a9e-4b7d-4e1a-9c3f-2d8b5a7e0c41",
+  },
+];
+const THREAD_LOADERS: ReadonlyArray<{
+  readonly name: string;
+  readonly suffix: string;
+  readonly response: unknown;
+  readonly load: (
+    input: HttpInput,
+    threadId: ThreadId,
+  ) => Effect.Effect<unknown, RemoteEnvironmentRequestError, HttpClient.HttpClient>;
+}> = [
+  {
+    name: "thread snapshot",
+    suffix: "",
+    response: encodeThreadSnapshot(THREAD),
+    load: (input, threadId) =>
+      ThreadSnapshotLoader.fetchEnvironmentThreadSnapshot({ ...input, threadId }),
+  },
+  {
+    name: "bounded thread snapshot",
+    suffix: "/bounded",
+    response: encodeBoundedSnapshot(BOUNDED_THREAD),
+    load: (input, threadId) => fetchEnvironmentBoundedThreadSnapshot({ ...input, threadId }),
+  },
+  {
+    name: "older thread history",
+    suffix: "/history",
+    response: THREAD_HISTORY,
+    load: (input, threadId) =>
+      fetchEnvironmentThreadHistoryPage({ ...input, threadId, cursor: "older-page" }),
+  },
+];
+
 describe("authenticated environment HTTP requests", () => {
+  it.effect.each(
+    THREAD_LOADERS.flatMap((loader) => THREAD_IDS.map((id) => ({ ...loader, ...id }))),
+  )("signs the requested $name URL for thread $threadId", (loader) =>
+    Effect.gen(function* () {
+      const harness = makeHarness(() => Response.json(loader.response));
+      yield* loader.load(harness.input, loader.threadId).pipe(Effect.provide(harness.httpLayer));
+
+      const expectedUrl = `${CURRENT_ORIGIN}/api/orchestration/threads/${loader.pathSegment}${loader.suffix}`;
+      const requestedUrl = harness.calls[0]!.url;
+      expect(harness.proofs[0]!.url).toBe(requestedUrl);
+      // The server checks the proof's htu against the received URL without its query.
+      expect(normalizeDpopHtu(requestedUrl)).toBe(expectedUrl);
+    }),
+  );
+
   it.effect.each(LOADERS)("rejects an invalid $name response", (loader) =>
     Effect.gen(function* () {
       const harness = makeHarness(() => Response.json({}));
@@ -275,11 +334,7 @@ describe("authenticated environment HTTP requests", () => {
       }
       expect(harness.authorizations).toEqual([{ expectedEnvironmentId: TARGET.environmentId }]);
       expect(harness.proofs).toEqual([
-        {
-          method: loader.method,
-          url: `${CURRENT_ORIGIN}${loader.path}`,
-          accessToken: "current-token",
-        },
+        { method: loader.method, url: call.url, accessToken: "current-token" },
       ]);
       if (loader.name === "older thread history") {
         expect(url.searchParams.get("cursor")).toBe("older-page");
@@ -344,7 +399,7 @@ describe("authenticated environment HTTP requests", () => {
         );
         expect(harness.proofs[1]).toEqual({
           method: "GET",
-          url: `${RENEWED_ORIGIN}${loader.path}`,
+          url: retried.url,
           accessToken: "renewed-token",
         });
         if (loader.name === "older thread history") {
