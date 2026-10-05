@@ -534,7 +534,10 @@ function isUnbornHeadStderr(stderr: string): boolean {
 // Git's own (C-locale) refusal of a `git worktree add` target, matched as a
 // whole `fatal:` line; a quoted path may itself contain newlines. "branch": `-b`
 // named an existing branch, so Git created nothing. "target": the path or
-// branch was taken before Git touched the path.
+// branch was taken before Git touched the path. Stricter than
+// `classifyGitFailure`, which only names the cause: this decides what the
+// rollback may leave alone, so it also knows the missing-worktree refusals and
+// paths containing quotes or newlines.
 function parseWorktreeAddRefusal(stderr: string): "branch" | "target" | null {
   if (/^fatal: a branch named '.+' already exists\r?$/m.test(stderr)) return "branch";
   return /^fatal: '[\s\S]+?' (?:already exists|is a missing but (?:already registered|locked) worktree;|is already (?:checked out|used by worktree) at '[\s\S]+?')\r?$/m.test(
@@ -3490,12 +3493,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         }),
       );
       if (result.exitCode === 0) return;
+      const reason = classifyGitFailure(result.stderr);
       return yield* new GitCommandError({
         ...gitCommandContext({
           operation: "GitVcsDriver.createWorktree",
           cwd: input.cwd,
           args: addArgs,
         }),
+        ...(reason === null ? {} : { reason }),
         detail: "git worktree add failed",
         ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
         stdoutLength: result.stdout.length,
