@@ -73,6 +73,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
   type McpInvocationScope,
   type McpThreadInvocationScope,
@@ -186,19 +187,6 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Workspace strategy for a scheduled task created/updated over MCP: bound runs
- * post into the existing thread (the strategy is unused, keep root); unbound
- * runs launch a fresh worktree per run.
- */
-function scheduledTaskWorkspaceStrategy(
-  boundToThread: boolean,
-): ScheduledTask["workspaceStrategy"] {
-  return boundToThread
-    ? { type: "root" }
-    : { type: "worktree", baseRef: "main", startFromOrigin: true };
 }
 
 function scheduledTaskSummary(task: ScheduledTask): OrchestratorMcpScheduledTask {
@@ -769,6 +757,7 @@ const make = Effect.gen(function* () {
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
   const projects = yield* ProjectService.ProjectService;
+  const git = yield* GitVcsDriver.GitVcsDriver;
 
   /** A caller-named project, which must exist before anything is recorded against it. */
   const requireProject = (projectId: ProjectId) =>
@@ -784,6 +773,38 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+
+  /**
+   * Workspace strategy for a scheduled task created/updated over MCP: bound runs
+   * post into the existing thread (the strategy is unused, keep root); unbound
+   * runs launch a fresh worktree per run from the base a manual worktree thread
+   * defaults to: origin's default branch, else the project's checked-out branch,
+   * else (detached HEAD or not a git repository) the previous default, main.
+   */
+  const scheduledTaskWorkspaceStrategy = (
+    boundToThread: boolean,
+    projectId: ProjectId,
+  ): Effect.Effect<ScheduledTask["workspaceStrategy"], OrchestratorMcpFailure> =>
+    Effect.gen(function* () {
+      if (boundToThread) return { type: "root" };
+      const { workspaceRoot } = yield* requireProject(projectId);
+      const checkedOutBranch = git.statusDetailsLocal(workspaceRoot).pipe(
+        Effect.map((status) => status.branch),
+        Effect.mapError((error) =>
+          failure(
+            "orchestration_error",
+            `Could not read the project's checked-out branch to pick a base branch; try again. ${error.message}`,
+          ),
+        ),
+      );
+      const baseRef =
+        (yield* git
+          .resolveDefaultBranchName(workspaceRoot, "origin")
+          .pipe(Effect.orElseSucceed(() => null))) ??
+        (yield* checkedOutBranch) ??
+        "main";
+      return { type: "worktree", baseRef, startFromOrigin: true };
+    });
 
   /** A client has no thread to inherit a model from, so it falls back to the project default. */
   const projectDefaultModelSelection = (
@@ -1345,7 +1366,7 @@ const make = Effect.gen(function* () {
           schedule: input.schedule,
           projectId,
           threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
-          workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
+          workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(bindToCurrentThread, projectId),
           modelSelection,
           runtimeMode: limits.runtimeMode,
           interactionMode: limits.interactionMode,
@@ -1417,7 +1438,7 @@ const make = Effect.gen(function* () {
         const workspaceStrategy =
           input.bindToCurrentThread === undefined
             ? existing.workspaceStrategy
-            : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+            : yield* scheduledTaskWorkspaceStrategy(input.bindToCurrentThread, existing.projectId);
         const upsertInput: ScheduledTaskUpsertInput = {
           id: existing.id,
           title: input.title ?? existing.title,
@@ -2134,4 +2155,5 @@ export const layer: Layer.Layer<
   | ProviderAdapterRegistry.ProviderAdapterRegistryV2
   | ScheduledTaskService.ScheduledTaskService
   | ProjectService.ProjectService
+  | GitVcsDriver.GitVcsDriver
 > = Layer.effect(OrchestratorMcpService, make);
