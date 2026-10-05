@@ -10,8 +10,11 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
-import type { EnvironmentPresentation } from "@t3tools/client-runtime/connection";
-import { createEnvironmentPresentationAtoms } from "@t3tools/client-runtime/state/presentation";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  presentEnvironmentConnection,
+  type EnvironmentPresentation,
+} from "@t3tools/client-runtime/connection";
 import { createServerEnvironmentAtoms } from "@t3tools/client-runtime/state/server";
 import { createOutdatedServerUpdateCommand } from "@t3tools/client-runtime/state/outdatedServerUpdate";
 import { createEnvironmentServerConfigsAtom } from "@t3tools/client-runtime/state/shell";
@@ -41,13 +44,6 @@ export const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRunt
 export const updateOutdatedServer = createOutdatedServerUpdateCommand(connectionAtomRuntime);
 export const environmentServerConfigsAtom = createEnvironmentServerConfigsAtom({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
-  serverConfigValueAtom: serverEnvironment.configValueAtom,
-});
-// Lives here, not in ./presentation, so shortcuts can read connection phases
-// without an import cycle; ./presentation re-exports it.
-export const environmentPresentations = createEnvironmentPresentationAtoms({
-  catalogValueAtom: environmentCatalog.catalogValueAtom,
-  stateAtom: environmentCatalog.stateAtom,
   serverConfigValueAtom: serverEnvironment.configValueAtom,
 });
 
@@ -142,10 +138,33 @@ export function createShortcutKeybindingsAtom(input: {
   );
 }
 
+// Each environment's connection and config in catalog order, presented as
+// ./presentation does for Settings; that module imports this one.
+const environmentConnectionsAtom = Atom.make((get) => {
+  const environments = new Map<
+    EnvironmentId,
+    Pick<EnvironmentPresentation, "connection" | "serverConfig">
+  >();
+  for (const [environmentId, entry] of get(environmentCatalog.catalogValueAtom).entries) {
+    const state = Option.getOrElse(
+      AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
+      () => AVAILABLE_CONNECTION_STATE,
+    );
+    environments.set(environmentId, {
+      connection:
+        entry.unsupportedReason === undefined
+          ? presentEnvironmentConnection(state)
+          : { phase: "unsupported", error: entry.unsupportedReason, traceId: null },
+      serverConfig: get(serverEnvironment.configValueAtom(environmentId)),
+    });
+  }
+  return environments;
+});
+
 export const primaryServerKeybindingsAtom = createShortcutKeybindingsAtom({
   primaryEnvironmentIdAtom,
   primaryConfigAtom: primaryServerConfigAtom,
-  environmentsAtom: environmentPresentations.presentationsAtom,
+  environmentsAtom: environmentConnectionsAtom,
 }).pipe(Atom.withLabel("web-primary-server-keybindings"));
 
 export const primaryServerAvailableEditorsAtom = Atom.make(

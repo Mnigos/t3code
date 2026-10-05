@@ -1,13 +1,20 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentPresentation } from "@t3tools/client-runtime/connection";
-import { createEnvironmentSummaryAtoms } from "@t3tools/client-runtime/state/presentation";
+import {
+  createEnvironmentPresentationAtoms,
+  createEnvironmentSummaryAtoms,
+} from "@t3tools/client-runtime/state/presentation";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
-import { environmentPresentations } from "./server";
+import { serverEnvironment } from "./server";
 
-export { environmentPresentations };
+export const environmentPresentations = createEnvironmentPresentationAtoms({
+  catalogValueAtom: environmentCatalog.catalogValueAtom,
+  stateAtom: environmentCatalog.stateAtom,
+  serverConfigValueAtom: serverEnvironment.configValueAtom,
+});
 
 export const environmentSummaries = createEnvironmentSummaryAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
