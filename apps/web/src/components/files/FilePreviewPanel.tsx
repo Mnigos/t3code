@@ -1,6 +1,5 @@
 import { Spinner } from "~/components/ui/spinner";
 import type {
-  ChatFileAttachment,
   EditorId,
   EnvironmentId,
   ResolvedKeybindingsConfig,
@@ -21,7 +20,8 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
-import { Code2, Eye, FolderTree, Globe2, Table2, WrapTextIcon } from "lucide-react";
+import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
+import { Code2, Eye, Table2 } from "lucide";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -30,6 +30,7 @@ import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
+import { MorphIcon } from "~/components/MorphIcon";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
@@ -38,13 +39,14 @@ import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh
 import { resolveDiffThemeName } from "~/lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
-import { isPreviewSupportedInRuntime } from "~/previewStateStore";
+import type { ChatFileAttachment } from "~/types";
 import { isAbsolutePath, resolvePathLinkTarget } from "~/terminal-links";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { buildFileReviewComment } from "~/reviewCommentContext";
 import { assetEnvironment } from "~/state/assets";
+import { usePreviewAvailable } from "~/browser/previewRuntime";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -80,6 +82,7 @@ import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRevision";
 import {
+  filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
   resolveFilePreviewPath,
   setMarkdownTaskChecked,
@@ -928,6 +931,7 @@ export default function FilePreviewPanel({
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const remoteOpenState = useRemoteOpenState(environmentId);
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
+  const previewAvailable = usePreviewAvailable(environmentId);
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
   });
@@ -954,6 +958,7 @@ export default function FilePreviewPanel({
     relativePath,
     attachment === undefined && relativePath !== null,
   );
+  const attemptedPath = file.readError?.resolvedPath ?? file.readError?.operationPath;
   // A chat link cannot tell a folder from a file, so a folder arrives here as
   // a file surface and the read fails. Keep the breadcrumbs, drop the preview
   // pane, and let the tree fill the surface with the folder revealed. Mutation
@@ -1030,7 +1035,7 @@ export default function FilePreviewPanel({
     previewPath !== null &&
     attachment === undefined &&
     !isVideo &&
-    isPreviewSupportedInRuntime() &&
+    previewAvailable &&
     isBrowserPreviewFile(previewPath);
   const absolutePath =
     relativePath && attachment === undefined ? resolvePathLinkTarget(relativePath, cwd) : null;
@@ -1140,13 +1145,10 @@ export default function FilePreviewPanel({
                 );
               }}
             >
-              {rendered ? (
-                <Code2 className="size-3.5" />
-              ) : renderedMode === "table" ? (
-                <Table2 className="size-3.5" />
-              ) : (
-                <Eye className="size-3.5" />
-              )}
+              <MorphIcon
+                className="size-3.5"
+                icon={rendered ? Code2 : renderedMode === "table" ? Table2 : Eye}
+              />
             </FileSurfaceAction>
           ) : null}
           {showsRawText ? (
@@ -1194,6 +1196,7 @@ export default function FilePreviewPanel({
               mimeType={attachment.mimeType}
               sizeBytes={attachment.sizeBytes}
               asset={{ environmentId, attachmentId: attachment.id }}
+              htmlRender={attachment.htmlRender === true}
             />
           ) : relativePath && isVideo && absolutePath ? (
             <WorkspaceVideoPreview
@@ -1235,8 +1238,29 @@ export default function FilePreviewPanel({
               workspaceMutationId={workspaceMutationId}
             />
           ) : relativePath && file.error && file.data === null ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
-              {file.error}
+            <div role="alert" className="flex min-h-0 flex-1 flex-col overflow-auto">
+              <div className="my-auto flex shrink-0 flex-col gap-3 px-6 py-6 text-center text-xs leading-relaxed">
+                <p className="text-destructive">
+                  {file.readError ? filePreviewReadErrorMessage(file.readError) : file.error}
+                </p>
+                {attemptedPath ? (
+                  <p className="text-muted-foreground">
+                    Attempted path
+                    <code className="block break-all font-mono text-foreground select-all">
+                      {attemptedPath}
+                    </code>
+                  </p>
+                ) : null}
+                {!isHostFile ? (
+                  <p className="text-muted-foreground">
+                    Workspace folder:{" "}
+                    <code className="break-all font-mono select-all">
+                      {file.readError?.cwd ?? cwd}
+                    </code>
+                    . Check the link's path or locate the file in Files.
+                  </p>
+                ) : null}
+              </div>
             </div>
           ) : relativePath && file.data === null ? (
             <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
