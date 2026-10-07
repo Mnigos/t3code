@@ -35,6 +35,8 @@ import {
   type SourceControlProviderKind,
   type SourceControlWritingStyleSettings,
   type ThreadId,
+  type VcsCreateWorktreeInput,
+  type VcsCreateWorktreeResult,
 } from "@t3tools/contracts";
 import {
   hasProjectSettingsOverrides,
@@ -64,7 +66,7 @@ import {
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
-import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -103,6 +105,10 @@ interface SourceControlTextGenerationSettings {
 export class GitManager extends Context.Service<
   GitManager,
   {
+    readonly createWorktree: (
+      input: VcsCreateWorktreeInput,
+      options?: GitVcsDriver.CreateWorktreeOptions,
+    ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
     readonly status: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
@@ -727,6 +733,25 @@ export const make = Effect.gen(function* () {
         );
     return resolveProjectSettings(settings, projectId).settings;
   });
+  // Best effort: a settings read failure falls back to the default location.
+  const readWorktreesDirectory = serverSettingsService.getSettings.pipe(
+    Effect.map((settings) => settings.worktreesDirectory),
+    Effect.orElseSucceed(() => ""),
+  );
+  const createWorktree: GitManager["Service"]["createWorktree"] = Effect.fn(
+    "GitManager.createWorktree",
+  )(function* (input, options) {
+    const submodules =
+      options?.submodules !== undefined
+        ? options.submodules
+        : yield* projectSettingsFor(input).pipe(
+            Effect.map((settings) => settings.worktreeSubmodules),
+            Effect.orElseSucceed(() => null),
+          );
+    const worktreesDirectory = yield* readWorktreesDirectory;
+    return yield* gitCore.createWorktree(input, { worktreesDirectory, ...options, submodules });
+  });
+
   const readRepositoryInstructions = (cwd: string, fileName: string) =>
     Effect.gen(function* () {
       const root = yield* fileSystem.realPath(cwd);
@@ -1403,11 +1428,15 @@ export const make = Effect.gen(function* () {
 
   // The target remote's repository, or the OWNER/REPO that `gh repo set-default`
   // recorded in its gh-resolved key (`base` means the remote itself).
-  const resolveTargetRepositoryContext = Effect.fn("resolveTargetRepositoryContext")(function* (
+  const applyGhResolvedRepository = Effect.fn("applyGhResolvedRepository")(function* (
     cwd: string,
     remoteName: string | null,
+    context: {
+      remoteUrlKey: string | null;
+      repositoryNameWithOwner: string | null;
+      ownerLogin: string | null;
+    },
   ) {
-    const context = yield* resolveRemoteRepositoryContext(cwd, remoteName);
     if (!remoteName) return context;
     const resolved = yield* readConfigValueNullable(cwd, `remote.${remoteName}.gh-resolved`);
     const [owner, name, ...rest] = resolved?.trim().split("/") ?? [];
@@ -1420,17 +1449,39 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  // Returns [head remote, target remote]. Most branches track the target, so read it once.
+  const resolveHeadAndTargetContexts = (
+    cwd: string,
+    remoteName: string | null,
+    targetRemoteName: string | null,
+  ) =>
+    remoteName === targetRemoteName
+      ? resolveRemoteRepositoryContext(cwd, remoteName).pipe(
+          Effect.flatMap((head) =>
+            applyGhResolvedRepository(cwd, targetRemoteName, head).pipe(
+              Effect.map((target) => [head, target] as const),
+            ),
+          ),
+        )
+      : Effect.all(
+          [
+            resolveRemoteRepositoryContext(cwd, remoteName),
+            resolveRemoteRepositoryContext(cwd, targetRemoteName).pipe(
+              Effect.flatMap((target) => applyGhResolvedRepository(cwd, targetRemoteName, target)),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        );
+
   const resolvePrLookupRepositoryIdentity = Effect.fn("resolvePrLookupRepositoryIdentity")(
     function* (cwd: string, branch: string, remoteNameOverride?: string) {
       const remoteName =
         remoteNameOverride ?? (yield* readConfigValueNullable(cwd, `branch.${branch}.remote`));
       const targetRemoteName = yield* resolveTargetRemoteName(cwd);
-      const [headRemote, targetRemote] = yield* Effect.all(
-        [
-          resolveRemoteRepositoryContext(cwd, remoteName),
-          resolveTargetRepositoryContext(cwd, targetRemoteName),
-        ],
-        { concurrency: "unbounded" },
+      const [headRemote, targetRemote] = yield* resolveHeadAndTargetContexts(
+        cwd,
+        remoteName,
+        targetRemoteName,
       );
       return {
         remoteName,
@@ -1456,12 +1507,10 @@ export const make = Effect.gen(function* () {
       headBranchFromUpstream.length === 0 || headBranch === details.branch;
 
     const targetRemoteName = yield* resolveTargetRemoteName(cwd);
-    const [remoteRepository, targetRepository] = yield* Effect.all(
-      [
-        resolveRemoteRepositoryContext(cwd, remoteName),
-        resolveTargetRepositoryContext(cwd, targetRemoteName),
-      ],
-      { concurrency: "unbounded" },
+    const [remoteRepository, targetRepository] = yield* resolveHeadAndTargetContexts(
+      cwd,
+      remoteName,
+      targetRemoteName,
     );
 
     const isCrossRepository =
@@ -2028,6 +2077,7 @@ export const make = Effect.gen(function* () {
         : null;
     const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
       timeoutMs: COMMIT_TIMEOUT_MS,
+      stage: filePaths ? { filePaths } : {},
       ...(commitProgress ? { progress: commitProgress } : {}),
     });
     if (currentHookName !== null) {
@@ -2627,6 +2677,7 @@ export const make = Effect.gen(function* () {
           path: null,
         },
         {
+          worktreesDirectory: yield* readWorktreesDirectory,
           // Best effort: a settings read failure falls back to the checkout's t3.json.
           submodules: yield* projectSettingsFor(input).pipe(
             Effect.map((settings) => settings.worktreeSubmodules),
@@ -2891,6 +2942,7 @@ export const make = Effect.gen(function* () {
   );
 
   return GitManager.of({
+    createWorktree,
     localStatus,
     remoteStatus,
     status,
