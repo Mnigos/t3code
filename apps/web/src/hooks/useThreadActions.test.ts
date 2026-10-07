@@ -14,13 +14,9 @@ import {
   readThreadPreviewState,
   resetPreviewStateForTests,
 } from "../previewStateStore";
-import { previewEnvironment } from "../state/preview";
-import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 
 const commands = vi.hoisted(() => ({
-  closeTerminal: vi.fn(),
-  closePreviews: vi.fn(),
   deleteThread: vi.fn(),
 }));
 const threadShell = vi.hoisted(() => ({
@@ -32,6 +28,11 @@ const threadShell = vi.hoisted(() => ({
   runtime: null,
 }));
 const readThreadShellMock = vi.hoisted(() => vi.fn());
+vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
+vi.mock("../state/session", async (original) => ({
+  ...(await original<typeof import("../state/session")>()),
+  readEnvironmentScope: () => true,
+}));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
   useCallback: (callback: unknown) => callback,
@@ -57,10 +58,6 @@ vi.mock("../state/entities", async (original) => ({
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => {
     switch (command) {
-      case terminalEnvironment.close:
-        return commands.closeTerminal;
-      case previewEnvironment.close:
-        return commands.closePreviews;
       case threadEnvironment.delete:
         return commands.deleteThread;
       default:
@@ -196,21 +193,15 @@ describe("deleteThread preview cleanup", () => {
     vi.restoreAllMocks();
   });
 
-  it("closes every preview after terminals and forgets only the deleted thread's state", async () => {
+  it("forgets only the deleted thread's preview state", async () => {
     const otherState = readThreadPreviewState(other);
     const result = await useThreadActions().deleteThread(target);
 
     expect(result._tag).toBe("Success");
-    expect(commands.closePreviews).toHaveBeenCalledExactlyOnceWith({
+    expect(commands.deleteThread).toHaveBeenCalledExactlyOnceWith({
       environmentId: target.environmentId,
       input: { threadId: target.threadId },
     });
-    expect(commands.closeTerminal.mock.invocationCallOrder[0]).toBeLessThan(
-      commands.closePreviews.mock.invocationCallOrder[0]!,
-    );
-    expect(commands.closePreviews.mock.invocationCallOrder[0]).toBeLessThan(
-      commands.deleteThread.mock.invocationCallOrder[0]!,
-    );
     expect(readThreadPreviewState(target).sessions).toEqual({});
     expect(readThreadPreviewState(other)).toBe(otherState);
   });
@@ -224,24 +215,6 @@ describe("deleteThread preview cleanup", () => {
     expect(result._tag).toBe("Failure");
     expect(readThreadPreviewState(target)).toBe(state);
     expect(Object.keys(readThreadPreviewState(target).sessions)).toEqual(["tab-a", "tab-b"]);
-  });
-
-  it("still deletes and clears state when closing previews fails", async () => {
-    commands.closePreviews.mockResolvedValue({
-      _tag: "Failure",
-      cause: new Error("preview close failed"),
-    });
-    const addToast = vi.spyOn(toastManager, "add");
-
-    const result = await useThreadActions().deleteThread(target);
-
-    expect(result._tag).toBe("Success");
-    expect(commands.deleteThread).toHaveBeenCalledExactlyOnceWith({
-      environmentId: target.environmentId,
-      input: { threadId: target.threadId },
-    });
-    expect(readThreadPreviewState(target).sessions).toEqual({});
-    expect(addToast).not.toHaveBeenCalled();
   });
 
   it.each(["Success", "Failure"] as const)(
