@@ -5,8 +5,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { describe, expect } from "vite-plus/test";
 
 import * as RemoteOpenTargets from "./RemoteOpenTargets.ts";
@@ -29,7 +29,7 @@ interface CommandResult {
 }
 
 /** Spawner answering `tailscale status --json` and `tailscale debug prefs` separately. */
-const spawnerLayer = (input: { readonly status: CommandResult; readonly prefs?: CommandResult }) =>
+const layerSpawner = (input: { readonly status: CommandResult; readonly prefs?: CommandResult }) =>
   Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
@@ -53,7 +53,7 @@ const spawnerLayer = (input: { readonly status: CommandResult; readonly prefs?: 
     }),
   );
 
-const netLayer = (input: { readonly ipv4: boolean; readonly ipv6: boolean }) =>
+const layerNet = (input: { readonly ipv4: boolean; readonly ipv6: boolean }) =>
   Layer.succeed(NetService.NetService, {
     canListenOnHost: () => Effect.succeed(true),
     isPortAvailableOnLoopback: () => Effect.succeed(true),
@@ -71,7 +71,7 @@ const resolveTargets = (input: {
     Effect.provideService(HostProcessHostname, input.hostname),
     Effect.provide(
       RemoteOpenTargets.layer.pipe(
-        Layer.provide(Layer.mergeAll(netLayer(input.sshd), spawnerLayer(input.tailscale))),
+        Layer.provide(Layer.mergeAll(layerNet(input.sshd), layerSpawner(input.tailscale))),
       ),
     ),
   );
