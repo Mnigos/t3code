@@ -5,10 +5,8 @@ import {
   encodeComposerContextClipboardHtml,
 } from "@t3tools/shared/composerContextClipboard";
 import {
-  CheckIcon,
   ChevronRightIcon,
   CodeIcon,
-  CopyIcon,
   FileSpreadsheetIcon,
   FileTextIcon,
   GlobeIcon,
@@ -16,10 +14,8 @@ import {
   InfoIcon,
   LightbulbIcon,
   MailIcon,
-  Maximize2Icon,
   MessageSquareIcon,
   MessageSquareWarningIcon,
-  Minimize2Icon,
   OctagonAlertIcon,
   PlayIcon,
   PresentationIcon,
@@ -29,6 +25,7 @@ import {
   WrapTextIcon,
   type LucideIcon,
 } from "lucide-react";
+import { Check, Copy, Maximize2, Minimize2 } from "lucide";
 import type {
   AssetResource,
   EnvironmentId,
@@ -56,7 +53,7 @@ import { inlineCodeFilePathCandidate } from "@t3tools/client-runtime/markdown-li
 import { mediaFileReference, mediaUrlReference } from "@t3tools/client-runtime/media-reference";
 import { mediaKindFromPath, mediaMimeTypeFromExtension } from "@t3tools/shared/filePreview";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import React, {
   Children,
   Suspense,
@@ -123,6 +120,7 @@ import {
 import { hasSpecificPierreIconForFileName, syntheticFileNameForLanguageId } from "../pierre-icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Button } from "./ui/button";
+import { MorphIcon } from "~/components/MorphIcon";
 import { ContextChip } from "./ContextChip";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
 import { ScrollArea } from "./ui/scroll-area";
@@ -163,6 +161,7 @@ import {
   shouldOpenMarkdownFileLinkInEditor,
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
+import { isMarkdownFileLinkLabel } from "@t3tools/client-runtime/markdown-links";
 import { readLocalApi } from "../localApi";
 import { useAssetUrlRefresh, useAssetUrlState } from "../assets/assetUrls";
 import { cn } from "../lib/utils";
@@ -191,7 +190,7 @@ import {
 } from "~/lib/openPullRequestLink";
 import { useOpenLink } from "../browser/useOpenLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
-import { isPreviewSupportedInRuntime } from "../previewStateStore";
+import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import { isAbsolutePath, resolvePathLinkTarget } from "../terminal-links";
 import {
   isBrowserPreviewFile,
@@ -379,7 +378,7 @@ function findTaskListMarkerOffset(markdown: string, listItemStart: number): numb
  * The default `1.25rem` marker gutter (`.chat-markdown ol`) fits one-character
  * markers. Wider markers can extend past it and get clipped by a collapsed
  * message's overflow. Widen the gutter to fit the widest marker, including a
- * negative marker's minus sign.
+ * negative marker's minus sign, the period, and the trailing space.
  */
 function orderedListGutterStyle(
   itemCount: number,
@@ -390,7 +389,7 @@ function orderedListGutterStyle(
   const lastNumber = firstNumber + Math.max(itemCount - 1, 0);
   const markerWidth = Math.max(String(firstNumber).length, String(lastNumber).length);
   if (markerWidth <= 1) return undefined;
-  return { "--list-gutter": `${markerWidth + 1}ch` };
+  return { "--list-gutter": `${markerWidth + 2}ch` };
 }
 
 type MarkdownImageHastNode = {
@@ -849,7 +848,7 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
               />
             }
           >
-            {expanded ? <Minimize2Icon className="size-3" /> : <Maximize2Icon className="size-3" />}
+            <MorphIcon className="size-3" icon={expanded ? Minimize2 : Maximize2} />
           </TooltipTrigger>
           <TooltipPopup side="top">{expandLabel}</TooltipPopup>
         </Tooltip>
@@ -869,7 +868,7 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
                 />
               }
             >
-              {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+              <MorphIcon className="size-3" icon={copied ? Check : Copy} />
             </TooltipTrigger>
             <TooltipPopup side="top">{copyLabel}</TooltipPopup>
           </Tooltip>
@@ -1063,7 +1062,7 @@ function MarkdownCodeBlock({
           />
         }
       >
-        {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+        <MorphIcon className="size-3" icon={copied ? Check : Copy} />
       </TooltipTrigger>
       <TooltipPopup side="top">{copyLabel}</TooltipPopup>
     </Tooltip>
@@ -1763,7 +1762,14 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
   readonly environmentId: EnvironmentId;
   readonly resource: Extract<
     AssetResource,
-    { readonly _tag: "attachment" | "workspace-file" | "media-file" | "github-media" }
+    {
+      readonly _tag:
+        | "attachment"
+        | "workspace-file"
+        | "media-file"
+        | "github-media"
+        | "tool-output-image";
+    }
   >;
   readonly kind?: "image" | "video";
   readonly alt: string;
@@ -2797,7 +2803,7 @@ function useChatMarkdownState({
           revealLabel={revealInFileManagerLabel}
           onOpenInBrowser={
             threadRef &&
-            isPreviewSupportedInRuntime() &&
+            isPreviewAvailableFor(threadRef.environmentId) &&
             isBrowserPreviewFile(fileLinkMeta.filePath)
               ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
               : undefined
@@ -3024,6 +3030,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       updateThreadPullRequestLink,
       fileLinkChip,
       renderContextReference,
+      text,
     } = use(ChatMarkdownRendererContext);
     const citation = href ? parseAssistantCitationHref(href) : null;
     if (citation) return <AssistantCitationChip citation={citation} />;
@@ -3066,7 +3073,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
         : null;
       const isSameDocumentLink = href?.startsWith("#") ?? false;
       const onClick = props.onClick;
-      const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
+      const canOpenInPreview = Boolean(threadRef && isPreviewAvailableFor(threadRef.environmentId));
       const linkChildren = <MarkdownLinkContext value>{children}</MarkdownLinkContext>;
       const link = (
         <a
@@ -3235,10 +3242,21 @@ const CHAT_MARKDOWN_COMPONENTS = {
       );
     }
 
-    return fileLinkChip(
-      fileLinkMeta,
-      `[${fileLinkMeta.basename}](${normalizedHref})`,
-      normalizedHref,
+    const label = nodeToPlainText(children);
+    const start = node?.position?.start.offset;
+    const end = node?.position?.end.offset;
+    const source = start !== undefined && end !== undefined ? text.slice(start, end) : "";
+    const copyMarkdown =
+      source.startsWith("[") && source.includes("](")
+        ? source
+        : `[${(label || fileLinkMeta.basename).replace(/[\\[\]]/g, "\\$&")}](${normalizedHref})`;
+    const chip = fileLinkChip(fileLinkMeta, copyMarkdown, normalizedHref);
+    return isMarkdownFileLinkLabel(label, normalizedHref) ? (
+      chip
+    ) : (
+      <span data-markdown-copy={copyMarkdown}>
+        {children} {chip}
+      </span>
     );
   },
   code: function MarkdownCode({ node, children, className, ...props }) {
