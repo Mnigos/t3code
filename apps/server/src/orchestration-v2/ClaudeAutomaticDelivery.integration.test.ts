@@ -131,6 +131,8 @@ it.effect.each(["child completion", "scheduled message", "user steering"] as con
         const offers: SDKUserMessage[] = [];
         const nativeQueue: SDKUserMessage[] = [];
         const batchAbort = new AbortController();
+        // A user steer interrupts the running turn; automatic deliveries must never interrupt.
+        let interrupts = 0;
         const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: modelSelection.instanceId,
           settings,
@@ -157,7 +159,9 @@ it.effect.each(["child completion", "scheduled message", "user steering"] as con
                   }),
                 setModel: () => Effect.void,
                 setPermissionMode: () => Effect.void,
-                interrupt: Effect.die("automatic delivery must never interrupt"),
+                interrupt: Effect.sync(() => {
+                  interrupts += 1;
+                }),
                 close: Effect.void,
               }),
             forkSession: () => Effect.die("unused"),
@@ -345,6 +349,7 @@ it.effect.each(["child completion", "scheduled message", "user steering"] as con
           yield* worker.drain();
           const explicitSteer = delivery === "user steering";
           assert.equal(batchAbort.signal.aborted, explicitSteer);
+          assert.equal(interrupts, explicitSteer ? 1 : 0);
           assert.equal(offers.length, explicitSteer ? 2 : 1);
           const finished = yield* watch(
             (event) =>
