@@ -5,7 +5,7 @@ import {
   resolveCodexReasoningSummary,
 } from "../src/orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { revertCodexThread } from "../src/provider/CodexThreadRevert.ts";
-import { buildCodexInitializeParams } from "../src/provider/Layers/CodexProvider.ts";
+import { buildCodexInitializeParams } from "../src/provider/CodexProvider.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
@@ -17,7 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Effect from "effect/Effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as CodexClient from "effect-codex-app-server/client";
 import type * as CodexSchema from "effect-codex-app-server/schema";
@@ -1148,7 +1148,7 @@ function makeRecorder({
   });
 }
 
-function makeCodexLayer({ recorder }: { readonly recorder: Recorder }) {
+function layerCodex({ recorder }: { readonly recorder: Recorder }) {
   const clientRequestMethodById = new Map<string, string>();
   const serverRequestMethodById = new Map<string, string>();
   const clientOptions: CodexClient.CodexAppServerClientOptions = {
@@ -1473,7 +1473,7 @@ function runReplaySession({
         return thread;
       }).pipe(
         Effect.provide(
-          makeCodexLayer({
+          layerCodex({
             recorder,
           }),
         ),
@@ -1494,7 +1494,7 @@ function runReplaySession({
         yield* runTurnStep(client, thread.thread.id, secondStep);
       }).pipe(
         Effect.provide(
-          makeCodexLayer({
+          layerCodex({
             recorder,
           }),
         ),
@@ -1527,7 +1527,7 @@ function runReplaySession({
         yield* runTurnStep(client, thread.thread.id, first);
         yield* runTurnStep(client, thread.thread.id, second);
         return thread.thread.id;
-      }).pipe(Effect.provide(makeCodexLayer({ recorder })));
+      }).pipe(Effect.provide(layerCodex({ recorder })));
 
       yield* recorder.writeRecord({
         type: "runtime_exit",
@@ -1544,7 +1544,7 @@ function runReplaySession({
         yield* revertCodexThread(client, threadId, rollback.numTurns);
         yield* client.request("thread/resume", resumeParams);
         yield* runTurnStep(client, threadId, after);
-      }).pipe(Effect.provide(makeCodexLayer({ recorder })));
+      }).pipe(Effect.provide(layerCodex({ recorder })));
       return;
     }
 
@@ -1595,7 +1595,7 @@ function runReplaySession({
       }
     }).pipe(
       Effect.provide(
-        makeCodexLayer({
+        layerCodex({
           recorder,
         }),
       ),
