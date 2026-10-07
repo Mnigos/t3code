@@ -145,7 +145,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     status: Schema.NullOr(OrchestrationV2RunStatus),
   }),
   dependencies: [
-    ...shared.dependencies,
+    ...withSettings,
     ThreadLaunchService.ThreadLaunchService,
     ManagedProjectFolders.ManagedProjectFolders,
     GitVcsDriver.GitVcsDriver,

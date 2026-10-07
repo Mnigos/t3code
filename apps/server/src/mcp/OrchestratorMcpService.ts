@@ -80,7 +80,7 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectSettingsService from "../project/ProjectSettingsService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import {
@@ -810,7 +810,8 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
-  const projects = yield* ProjectService.ProjectService;
+  // Resolved projects: their default model is the one new threads in them get.
+  const projects = yield* ProjectSettingsService.ProjectSettingsService;
 
   /** A caller-named project, which must exist before anything is recorded against it. */
   const requireProject = (projectId: ProjectId) =>
@@ -2470,6 +2471,6 @@ export const layer: Layer.Layer<
   | ProviderRegistry.ProviderRegistry
   | ProviderAdapterRegistry.ProviderAdapterRegistryV2
   | ScheduledTaskService.ScheduledTaskService
-  | ProjectService.ProjectService
+  | ProjectSettingsService.ProjectSettingsService
   | SecretRequests.SecretRequests
 > = Layer.effect(OrchestratorMcpService, make);

@@ -83,6 +83,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
         },
       }),
       Layer.mock(Project.ProjectService)({}),
+      Layer.mock(ProjectSettingsService.ProjectSettingsService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       NodeServices.layer,
@@ -154,6 +155,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
         },
       }),
       Layer.mock(Project.ProjectService)({}),
+      Layer.mock(ProjectSettingsService.ProjectSettingsService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
         ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
@@ -696,9 +698,28 @@ const clientLaunchHarness = (input: {
   readonly runtimeModeCeiling: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
   readonly workspaceRoot?: string;
+  /** The model on the project record; omitted means the harness's model. */
+  readonly recordModelSelection?: ProjectRecord["defaultModelSelection"];
+  readonly settings?: Parameters<typeof Settings.layerTest>[0];
 }) => {
   const projectId = ProjectId.make("project:client-target");
-  const modelSelection = { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" };
+  const modelSelection = {
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    model: "claude-opus",
+  };
+  let project: ProjectRecord = {
+    id: projectId,
+    title: "Client target",
+    workspaceRoot: input.workspaceRoot ?? "/projects/client-target",
+    defaultModelSelection:
+      input.recordModelSelection === undefined ? modelSelection : input.recordModelSelection,
+    defaultThreadEnvMode: null,
+    autoPull: false,
+    scripts: [],
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+    deletedAt: null,
+  };
   const layerDependencies = Layer.mergeAll(
     NodeCrypto.layer,
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -732,20 +753,28 @@ const clientLaunchHarness = (input: {
       },
     }),
     Layer.mock(Project.ProjectService)({
-      getById: (id) =>
-        Effect.succeed(
-          id === projectId
-            ? Option.some({
-                id,
-                workspaceRoot: input.workspaceRoot ?? "/projects/client-target",
-                defaultModelSelection: modelSelection,
-              } as unknown as ProjectRecord)
-            : Option.none(),
-        ),
+      getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
+      update: ({ commandId: _commandId, projectId: _projectId, ...fields }) =>
+        Effect.sync(() => {
+          project = {
+            ...project,
+            ...fields,
+            title: fields.title ?? project.title,
+            workspaceRoot: fields.workspaceRoot ?? project.workspaceRoot,
+            defaultModelSelection:
+              fields.defaultModelSelection === undefined
+                ? project.defaultModelSelection
+                : fields.defaultModelSelection,
+            scripts: fields.scripts ?? project.scripts,
+          };
+          return project;
+        }),
     }),
+    Settings.layerTest(input.settings),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     NodeServices.layer,
   ).pipe(
+    (layer) => ProjectSettingsService.layer.pipe(Layer.provideMerge(layer)),
     Layer.provideMerge(GitVcsDriver.layer),
     Layer.provideMerge(VcsProcess.layer),
     Layer.provideMerge(
@@ -787,6 +816,50 @@ it.effect("a client launches at its ceiling with the project's default model", (
     expect(untargeted.at(-1)?.result).toMatchObject({ code: "target_required" });
     expect(launched).toHaveLength(1);
   }),
+);
+
+it.effect("a client launch without a model uses the default t3_project_update saved", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const harness = clientLaunchHarness({
+      runtimeModeCeiling: "full-access",
+      launched,
+      recordModelSelection: null,
+      settings: { projectSettingsFolded: true },
+    });
+    // handle provides dependencies on every call; keep one settings instance across calls.
+    const dependencies = Layer.succeedContext(yield* Layer.build(harness.dependencies));
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const launch = toolkit
+      .handle("t3_thread_launch", { title: "Fix", projectId: harness.projectId })
+      .pipe(
+        Stream.unwrap,
+        Stream.runCollect,
+        Effect.map((results) => results.at(-1)?.result),
+        Effect.provide(dependencies),
+      );
+
+    expect(yield* launch).toMatchObject({
+      code: "invalid_request",
+      message: expect.stringContaining("Pass modelSelection"),
+    });
+    const savedModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
+    yield* toolkit
+      .handle("t3_project_update", {
+        projectId: harness.projectId,
+        defaultModelSelection: savedModel,
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    expect(yield* launch).toMatchObject({
+      projectId: harness.projectId,
+      modelSelection: savedModel,
+    });
+    expect(launched.map((entry) => entry.modelSelection)).toEqual([savedModel]);
+  }).pipe(Effect.scoped),
 );
 
 it.effect("a launch binds only an existing checkout that is one of the project's worktrees", () =>

@@ -97,7 +97,8 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 ),
               )).projectId
             : yield* resolveProjectId(context, input.projectId);
-        const readProject = Project.ProjectService.pipe(
+        // The resolved project: its default model is the one new threads in it get.
+        const readProject = ProjectSettings.ProjectSettingsService.pipe(
           Effect.flatMap((projects) => projects.getById(projectId)),
           Effect.mapError(unavailable),
           Effect.map(Option.getOrUndefined),
