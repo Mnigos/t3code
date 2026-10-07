@@ -832,10 +832,10 @@ const make = Effect.gen(function* () {
       const { workspaceRoot } = yield* requireProject(projectId);
       const checkedOutBranch = git.statusDetailsLocal(workspaceRoot).pipe(
         Effect.map((status) => status.branch),
-        Effect.mapError((error) =>
+        Effect.mapError(() =>
           failure(
             "orchestration_error",
-            `Could not read the project's checked-out branch to pick a base branch; try again. ${error.message}`,
+            "Could not read the project's checked-out branch to pick a base branch; try again.",
           ),
         ),
       );
