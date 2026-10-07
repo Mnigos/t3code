@@ -9,17 +9,19 @@ import type { ScopedSettingsPatch } from "./scopedSettings";
 
 const state = vi.hoisted(() => ({
   settings: {} as typeof DEFAULT_UNIFIED_SETTINGS,
-  receive: (_settings: typeof DEFAULT_UNIFIED_SETTINGS) => {},
+  receivers: new Set<(settings: typeof DEFAULT_UNIFIED_SETTINGS) => void>(),
   update: vi.fn<(patch: ScopedSettingsPatch) => Promise<boolean>>(),
 }));
 
 vi.mock("./useScopedSettings", () => ({
   useScopedSettings: () => {
     const [settings, setSettings] = useState(state.settings);
-    state.receive = setSettings;
+    // Every component reading settings must see pushed values.
+    state.receivers.add(setSettings);
     return settings;
   },
   useUpdateScopedSettings: () => state.update,
+  useScopedSettingsMixed: () => false,
   useClearScopedSettings: () => vi.fn(),
 }));
 vi.mock("./SettingsScopeContext", () => ({
@@ -35,6 +37,7 @@ vi.mock("./settingsLayout", () => ({
   SettingsPageContainer: ({ children }: { children: ReactNode }) => children,
   SettingsSection: ({ children }: { children: ReactNode }) => children,
   SettingsRow: ({ control }: { control: ReactNode }) => <div>{control}</div>,
+  SettingResetButton: () => null,
 }));
 
 import { StorageSettingsPanel } from "./StorageSettings";
@@ -60,6 +63,7 @@ async function setup(
   { deferred = false } = {},
 ) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.receivers.clear();
   state.settings = {
     ...DEFAULT_UNIFIED_SETTINGS,
     storageCleanup: { ...DEFAULT_UNIFIED_SETTINGS.storageCleanup, [key]: initial },
@@ -69,7 +73,7 @@ async function setup(
       ...state.settings,
       storageCleanup: { ...state.settings.storageCleanup, [key]: value },
     };
-    state.receive(state.settings);
+    for (const receive of state.receivers) receive(state.settings);
   };
   const saves: { promise: Promise<boolean>; resolve: (saved: boolean) => void }[] = [];
   state.update.mockReset().mockImplementation((patch) => {
@@ -85,7 +89,7 @@ async function setup(
       ...state.settings,
       storageCleanup: { ...state.settings.storageCleanup, ...patch.storageCleanup },
     };
-    state.receive(state.settings);
+    for (const receive of state.receivers) receive(state.settings);
     return Promise.resolve(true);
   });
   container = document.createElement("div");
@@ -442,33 +446,34 @@ describe("Delete inactive worktrees", () => {
     expect(state.update).not.toHaveBeenCalled();
   });
 
-  for (const unparseable of [false, true]) {
-    it(`consumes Escape on the switch after ${unparseable ? "unparseable text and Enter" : "moving focus from an untouched draft"}`, async () => {
-      const ui = await setup(rule);
-      await ui.clickSwitch();
-      if (unparseable) {
-        await ui.replace("+");
-        await ui.press("Enter");
-        expect(ui.input().value).toBe("+");
-      } else {
-        await act(async () => ui.toggle.focus());
-        ui.expectOn(8);
-      }
-      expect(document.activeElement).toBe(ui.toggle);
+  it.each([
+    { unparseable: false, after: "moving focus from an untouched draft" },
+    { unparseable: true, after: "unparseable text and Enter" },
+  ])("consumes Escape on the switch after $after", async ({ unparseable }) => {
+    const ui = await setup(rule);
+    await ui.clickSwitch();
+    if (unparseable) {
+      await ui.replace("+");
+      await ui.press("Enter");
+      expect(ui.input().value).toBe("+");
+    } else {
+      await act(async () => ui.toggle.focus());
+      ui.expectOn(8);
+    }
+    expect(document.activeElement).toBe(ui.toggle);
+    expect(state.update).not.toHaveBeenCalled();
+    const onKeyDown = vi.fn();
+    window.addEventListener("keydown", onKeyDown);
+    try {
+      const event = await ui.press("Escape");
+      expect(event.defaultPrevented).toBe(true);
+      expect(onKeyDown).not.toHaveBeenCalled();
+      ui.expectOff();
       expect(state.update).not.toHaveBeenCalled();
-      const onKeyDown = vi.fn();
-      window.addEventListener("keydown", onKeyDown);
-      try {
-        const event = await ui.press("Escape");
-        expect(event.defaultPrevented).toBe(true);
-        expect(onKeyDown).not.toHaveBeenCalled();
-        ui.expectOff();
-        expect(state.update).not.toHaveBeenCalled();
-      } finally {
-        window.removeEventListener("keydown", onKeyDown);
-      }
-    });
-  }
+    } finally {
+      window.removeEventListener("keydown", onKeyDown);
+    }
+  });
 
   it("ignores a held stepper released after cancelling and opening a fresh draft", async () => {
     const ui = await setup(rule);
