@@ -101,15 +101,14 @@ import {
 } from "../../provider/ClaudeModelCatalog.ts";
 import {
   boundProviderEventForLogging,
-  type EventNdjsonLogger,
   shouldPersistProviderEvent,
 } from "../../provider/EventNdjsonLogger.ts";
-import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   claudeRateLimitEventToUpdate,
   type ClaudeScopedLimitNames,
 } from "../../provider/claudeUsageLimits.ts";
-import type { ServerProviderShape } from "@t3tools/provider-core/server/snapshot";
+import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
@@ -118,6 +117,7 @@ import {
   normalizeMcpText,
 } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import {
   makeProviderFailure,
@@ -135,7 +135,7 @@ import {
   type BackgroundWorkReport,
   backgroundWorkNotification,
 } from "@t3tools/provider-core/server/notification";
-import * as ProviderContinuationRequests from "@t3tools/provider-core/server/continuationRequests";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
@@ -593,7 +593,7 @@ export function loggedClaudeQueryOptions(
 }
 
 export function makeClaudeAgentSdkProtocolLogger(input: {
-  readonly nativeEventLogger: EventNdjsonLogger | undefined;
+  readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }): ClaudeAgentSdkProtocolLogger | undefined {
@@ -1018,7 +1018,7 @@ export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 const CLAUDE_T3_MCP_AUTHORIZATION_ENV = "T3_CODE_MCP_AUTHORIZATION";
 
 export function claudeMcpQueryOverrides(input: {
-  readonly threadId: ThreadId;
+  readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly readOnlySandbox: boolean;
   readonly allowedTools?: ReadonlyArray<string>;
 }): {
@@ -1026,7 +1026,7 @@ export function claudeMcpQueryOverrides(input: {
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
   readonly mcpEnvironment?: Readonly<Record<string, string>>;
 } {
-  const session = McpProviderSession.readMcpProviderSession(input.threadId);
+  const session = input.mcpSession;
   if (session === undefined) {
     return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
   }
@@ -1162,7 +1162,7 @@ function resultTextFromSdkMessage(
 }
 
 function makeProviderThread(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly providerInstanceId: ProviderInstanceId;
   readonly appThreadId: OrchestrationV2ProviderThread["appThreadId"];
   readonly ownerNodeId?: OrchestrationV2ProviderThread["ownerNodeId"];
@@ -2625,7 +2625,7 @@ function providerFailureFromApiRetry(message: SDKAPIRetryMessage): Orchestration
 }
 
 function buildAssistantArtifacts(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly nativeItemId: string;
@@ -3059,10 +3059,10 @@ export interface ClaudeAdapterV2Options {
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly crypto: Crypto.Crypto;
-  readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
-  readonly onUsageLimits?: ServerProviderShape["applyUsageLimits"];
+  readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
   readonly continuationRequests?: {
     readonly offer: (
@@ -3071,9 +3071,10 @@ export interface ClaudeAdapterV2Options {
   };
 }
 
-export function makeClaudeAdapterV2(
+export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   adapterOptions: ClaudeAdapterV2Options,
-): ProviderAdapter.ProviderAdapterV2Shape {
+) {
+  const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { attachmentsDir, fileSystem, path, crypto, idAllocator, queryRunner } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests ?? {
     offer: () => Effect.void,
@@ -3400,7 +3401,6 @@ export function makeClaudeAdapterV2(
             type: "turn_item.updated",
             driver: CLAUDE_PROVIDER,
             turnItem: makeProviderRetryTurnItem({
-              idAllocator,
               driver: CLAUDE_PROVIDER,
               threadId: context.input.threadId,
               runId: context.input.runId,
@@ -5127,7 +5127,6 @@ export function makeClaudeAdapterV2(
               type: "turn_item.updated",
               driver: CLAUDE_PROVIDER,
               turnItem: makeProviderRetryTurnItem({
-                idAllocator,
                 driver: CLAUDE_PROVIDER,
                 threadId: input.context.input.threadId,
                 runId: input.context.input.runId,
@@ -6133,7 +6132,6 @@ export function makeClaudeAdapterV2(
               type: "turn_item.updated",
               driver: CLAUDE_PROVIDER,
               turnItem: makeProviderRetryTurnItem({
-                idAllocator,
                 driver: CLAUDE_PROVIDER,
                 threadId: context.input.threadId,
                 runId: context.input.runId,
@@ -7309,7 +7307,7 @@ export function makeClaudeAdapterV2(
         ) {
           const queryPolicy = claudeRuntimeQueryPolicyForRuntimePolicy(turnInput.runtimePolicy);
           const mcpOverrides = claudeMcpQueryOverrides({
-            threadId: turnInput.threadId,
+            mcpSession: yield* mcpSessions.read(turnInput.threadId),
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
             ...(queryPolicy.allowedTools === undefined
@@ -8221,13 +8219,14 @@ export function makeClaudeAdapterV2(
         ),
     ),
   });
-}
+});
 
 export type ClaudeAdapterV2DriverEnv =
   | ClaudeAgentSdkQueryRunner
   | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
+  | McpProviderSessions.McpProviderSessions
   | Path.Path
   | ServerConfig.ServerConfig;
 
@@ -8251,7 +8250,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       expandHomePath(config.binaryPath),
       claudeEnvironment,
     );
-    return makeClaudeAdapterV2({
+    return yield* makeClaudeAdapterV2({
       instanceId,
       settings: { ...config, enabled, binaryPath },
       environment: claudeEnvironment,
@@ -8299,7 +8298,7 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
   const serverConfig = yield* ServerConfig.ServerConfig;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
 
-  return makeClaudeAdapterV2({
+  return yield* makeClaudeAdapterV2({
     instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
     settings: DEFAULT_CLAUDE_SETTINGS,
     environment: hostEnvironment,
@@ -8320,6 +8319,7 @@ const layer: Layer.Layer<
   | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
+  | McpProviderSessions.McpProviderSessions
   | Path.Path
   | ServerConfig.ServerConfig
 > = Layer.effect(ProviderAdapter.ProviderAdapterV2, makeDefaultClaudeAdapterV2());
