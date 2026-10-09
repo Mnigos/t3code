@@ -353,8 +353,7 @@ describe("AcpRegistryAdapterV2", () => {
         ACP_REGISTRY_PROVIDER,
       );
       const instanceId = ProviderInstanceId.make("acp-registry-compact");
-      const adapter = makeAcpRegistryAdapterV2({
-        crypto: yield* Crypto.Crypto,
+      const adapter = yield* makeAcpRegistryAdapterV2({
         selfInvocation: yield* resolveSelfInvocation(),
         instanceId,
         settings: yield* decodeAcpRegistryAdapterSettings({
@@ -363,10 +362,7 @@ describe("AcpRegistryAdapterV2", () => {
         }),
         environment: {},
         childProcessSpawner,
-        fileSystem,
-        idAllocator: yield* IdAllocator.IdAllocatorV2,
         resolver: { resolve: () => Effect.die("the runtime is injected") },
-        serverConfig: yield* ServerConfig.ServerConfig,
         makeRuntime: makeAcpReplayRuntime({
           transcript,
           statusPath,
