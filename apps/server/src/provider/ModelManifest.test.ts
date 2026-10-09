@@ -6,12 +6,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ModelManifest from "./ModelManifest.ts";
-import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 
 /**
  * Test policy: this file covers manifest machinery, not manifest contents.
@@ -35,6 +34,12 @@ describe("classifyModels", () => {
     const manifest: ModelManifest.ModelManifestData = {
       version: 1,
       currentModels: { codex: ["gpt-test"] },
+      providers: {
+        codex: {
+          profiles: {},
+          models: [{ slug: "gpt-old", name: "Old", status: "legacy" }],
+        },
+      },
     };
     const models = [
       model({ slug: "openai.gpt-test", isLegacy: true }),
@@ -51,16 +56,23 @@ describe("classifyModels", () => {
       ],
     );
   });
-  it("flags non-current models, clears stale flags, and skips custom models", () => {
+  it("flags only known legacy models, clears stale flags, and skips custom models", () => {
     const manifest: ModelManifest.ModelManifestData = {
       version: 1,
       currentModels: { codex: ["current-a", "current-b"] },
+      providers: {
+        codex: {
+          profiles: {},
+          models: [{ slug: "old-model", name: "Old", status: "legacy" }],
+        },
+      },
     };
     const models = [
       model({ slug: "current-a" }),
       // Stale flag from a previous classification pass must be cleared.
       model({ slug: "current-b", isLegacy: true }),
       model({ slug: "old-model" }),
+      model({ slug: "new-release", isLegacy: true }),
       // Custom models are user-defined and never reclassified.
       model({ slug: "my-own-model", isCustom: true }),
     ];
@@ -73,10 +85,25 @@ describe("classifyModels", () => {
         ["current-a", false],
         ["current-b", false],
         ["old-model", true],
+        ["new-release", false],
         ["my-own-model", false],
       ],
     );
   });
+  it.each(["codex", "antigravity"])(
+    "keeps newly discovered %s models current when the manifest has no catalog",
+    (driverKind) => {
+      const models = [model({ slug: "new-release", isLegacy: true })];
+      assert.deepStrictEqual(
+        ModelManifest.classifyModels(
+          models,
+          { version: 1, currentModels: { [driverKind]: ["known-current"] } },
+          ProviderDriverKind.make(driverKind),
+        ),
+        [model({ slug: "new-release" })],
+      );
+    },
+  );
 });
 
 describe("applyManifestDefault", () => {
@@ -122,6 +149,80 @@ describe("applyManifestDefault", () => {
       ModelManifest.applyManifestDefault(models.slice(0, 1), manifest, driver),
       models.slice(0, 1),
     );
+  });
+});
+
+describe("applyModelManifest", () => {
+  const manifest: ModelManifest.ModelManifestData = {
+    version: 1,
+    currentModels: {},
+    providers: {
+      codex: {
+        profiles: {},
+        models: [
+          {
+            slug: "gpt-next",
+            name: "GPT Next",
+            status: "current",
+            badge: "new",
+            adapter: { codex: { minVersion: "1.2.0" } },
+          },
+          { slug: "gpt-unversioned", name: "GPT Unversioned", status: "current" },
+          {
+            slug: "gpt-retired",
+            name: "GPT Retired",
+            status: "legacy",
+            adapter: { codex: { minVersion: "1.2.0" } },
+          },
+        ],
+      },
+    },
+  };
+  const draft = (version: string | null, models: ReadonlyArray<ServerProviderModel> = []) => ({
+    enabled: true,
+    installed: true,
+    version,
+    status: "ready" as const,
+    auth: { status: "authenticated" as const },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models,
+    slashCommands: [],
+    skills: [],
+  });
+
+  it("names current Codex models that need a newer CLI and are missing from discovery", () => {
+    assert.deepStrictEqual(
+      ModelManifest.applyModelManifest(draft("1.1.9"), manifest, CODEX).updateRequiredModels,
+      [{ slug: "gpt-next", name: "GPT Next", badge: "new", minVersion: "1.2.0" }],
+    );
+    for (const result of [
+      // The CLI is new enough.
+      ModelManifest.applyModelManifest(draft("1.2.0"), manifest, CODEX),
+      // The CLI already lists the model, even under a qualified slug.
+      ModelManifest.applyModelManifest(
+        draft("1.1.9", [model({ slug: "openai.gpt-next" })]),
+        manifest,
+        CODEX,
+      ),
+      // An unknown version cannot be compared.
+      ModelManifest.applyModelManifest(draft(null), manifest, CODEX),
+      // A qualified manifest slug still matches the discovered family.
+      ModelManifest.applyModelManifest(
+        draft("1.1.9", [model({ slug: "gpt-next" })]),
+        {
+          ...manifest,
+          providers: {
+            codex: {
+              profiles: {},
+              models: [{ ...manifest.providers!.codex!.models[0]!, slug: "openai.gpt-next" }],
+            },
+          },
+        },
+        CODEX,
+      ),
+    ]) {
+      assert.isUndefined(result.updateRequiredModels);
+    }
   });
 });
 
@@ -334,13 +435,13 @@ const INVALID_REMOTE_MANIFESTS: ReadonlyArray<ModelManifest.ModelManifestData> =
   }),
 ];
 
-const httpClientLayer = (handler: () => Response) =>
+const layerHttpClient = (handler: () => Response) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, handler()))),
   );
 
-const serviceLayers = (input: {
+const layerService = (input: {
   readonly prefix: string;
   readonly response: () => Response;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
@@ -348,7 +449,7 @@ const serviceLayers = (input: {
   ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(ServerSettings.layerTest(input.settings ?? {})),
-    Layer.provideMerge(httpClientLayer(input.response)),
+    Layer.provideMerge(layerHttpClient(input.response)),
   );
 
 describe("ModelManifest service", () => {
@@ -374,7 +475,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-force-refresh-test",
           response: () => Response.json(fetchCount++ === 0 ? REMOTE_MANIFEST : updated),
         }),
@@ -396,7 +497,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-force-retry-test",
           response: () =>
             fetchCount++ === 1
@@ -419,7 +520,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-force-initial-retry-test",
           response: () =>
             fetchCount++ === 0
@@ -443,7 +544,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-fetch-test",
           response: () => Response.json(REMOTE_MANIFEST),
         }),
@@ -467,7 +568,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-stale-fetch-test",
           response: () => Response.json(remote),
         }),
@@ -482,7 +583,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-malformed-test",
           response: () => Response.json({ version: 999, nonsense: true }),
         }),
@@ -509,7 +610,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-last-good-test",
           response: () => Response.json(responses[responseIndex]),
         }),
@@ -549,7 +650,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-newer-bundle-test",
           response: () => Response.json(REMOTE_MANIFEST),
         }),
@@ -562,7 +663,7 @@ describe("ModelManifest service", () => {
       let fetchCount = 0;
       const service = yield* ModelManifest.make.pipe(
         Effect.provide(
-          httpClientLayer(() => {
+          layerHttpClient(() => {
             fetchCount += 1;
             return Response.json(REMOTE_MANIFEST);
           }),
@@ -574,7 +675,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-optout-test",
           response: () => Response.json(REMOTE_MANIFEST),
           settings: { enableProviderUpdateChecks: false },
@@ -582,62 +683,6 @@ describe("ModelManifest service", () => {
       ),
     ),
   );
-});
-
-// TEMPORARY V2 preview stopgap; remove with `withPreviewCompatibility` (#2829).
-describe("compatibility policy by release channel", () => {
-  const OPENCODE = ProviderDriverKind.make("opencode");
-  // Main's OpenCode policy (#14198): stable and nightly have no OpenCode 2 runtime.
-  const remote: ModelManifest.ModelManifestData = {
-    ...REMOTE_MANIFEST,
-    compatibility: [
-      {
-        driver: OPENCODE,
-        t3CodeRange: ">=0.0.42",
-        recommendedRange: ">=1.14.19 <2.0.0",
-        recommendedVersion: "1.14.19",
-        ranges: [
-          { range: ">=2.0.0", status: "broken" },
-          { range: ">=1.14.19 <2.0.0", status: "supported" },
-          { range: "<1.14.19", status: "broken" },
-        ],
-      },
-    ],
-  };
-
-  for (const [channel, t3CodeVersion, expected, openCode2Status] of [
-    [
-      "preview builds keep the bundled policy",
-      "0.0.44-preview.20260929.1",
-      { ...remote, compatibility: ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility },
-      "supported",
-    ],
-    ["stable builds adopt the fetched policy", "0.0.44", remote, "broken"],
-    ["nightly builds adopt the fetched policy", "0.0.44-nightly.20260929.1", remote, "broken"],
-  ] as const) {
-    it.live(channel, () =>
-      Effect.gen(function* () {
-        const openCode2 = (manifest: ModelManifest.ModelManifestData) =>
-          resolveProviderCompatibility(manifest.compatibility, OPENCODE, "2.0.18", t3CodeVersion)
-            ?.status;
-        const refreshed = yield* (yield* ModelManifest.makeForVersion(t3CodeVersion)).refresh;
-        assert.deepStrictEqual(refreshed, expected);
-        assert.strictEqual(openCode2(refreshed), openCode2Status);
-
-        // A restart reads the fetched manifest back from the disk cache.
-        const rebooted = yield* (yield* ModelManifest.makeForVersion(t3CodeVersion)).current;
-        assert.deepStrictEqual(rebooted, expected);
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          serviceLayers({
-            prefix: "model-manifest-channel-compatibility-test",
-            response: () => Response.json(remote),
-          }),
-        ),
-      ),
-    );
-  }
 });
 
 it.effect("caches valid compatibility policies and keeps them after a malformed refresh", () => {
@@ -664,7 +709,7 @@ it.effect("caches valid compatibility policies and keeps them after a malformed 
   }).pipe(
     Effect.scoped,
     Effect.provide(
-      serviceLayers({
+      layerService({
         prefix: "model-manifest-compatibility-test",
         response: () =>
           Response.json(
