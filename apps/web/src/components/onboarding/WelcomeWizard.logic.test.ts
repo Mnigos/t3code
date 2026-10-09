@@ -2,13 +2,16 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { resolveWizardEnvironmentStatus } from "./WelcomeWizard.logic";
 
+const connection = (
+  phase: Parameters<typeof resolveWizardEnvironmentStatus>[0]["connection"]["phase"],
+) => ({ phase, error: null, traceId: null });
+
 describe("resolveWizardEnvironmentStatus", () => {
   it("reports a switched-off computer as off whatever its phase", () => {
     for (const phase of ["available", "connecting", "connected", "error"] as const) {
-      expect(resolveWizardEnvironmentStatus({ enabled: false, phase, error: null })).toEqual({
-        kind: "off",
-        text: "Off",
-      });
+      expect(
+        resolveWizardEnvironmentStatus({ enabled: false, connection: connection(phase) }),
+      ).toEqual({ kind: "off", text: "Off" });
     }
   });
 
@@ -17,25 +20,18 @@ describe("resolveWizardEnvironmentStatus", () => {
       resolveWizardEnvironmentStatus({
         enabled: false,
         unsupportedReason: "server too old",
-        phase: "unsupported",
-        error: null,
+        connection: connection("unsupported"),
       }),
-    ).toEqual({ kind: "failed", text: "Not supported: server too old" });
+    ).toEqual({ kind: "unsupported", text: "Not supported: server too old" });
   });
 
-  it("names the non-connected phases instead of showing them as connecting", () => {
-    const status = (
-      phase: Parameters<typeof resolveWizardEnvironmentStatus>[0]["phase"],
-      error: string | null = null,
-    ) => resolveWizardEnvironmentStatus({ enabled: true, phase, error }).text;
+  it("shows the live connection label for a computer that is on", () => {
+    const status = (phase: Parameters<typeof connection>[0]) =>
+      resolveWizardEnvironmentStatus({ enabled: true, connection: connection(phase) });
 
-    expect(status("connected")).toBe("Connected");
-    expect(status("offline")).toBe("Offline");
-    expect(status("error", "session expired")).toBe("Connection failed: session expired");
-    expect(status("error")).toBe("Connection failed");
-    expect(status("unsupported", "server too old")).toBe("Not supported: server too old");
-    expect(status("available")).toBe("Connecting…");
-    expect(status("connecting")).toBe("Connecting…");
-    expect(status("reconnecting")).toBe("Connecting…");
+    expect(status("connected")).toEqual({ kind: "on", text: "Connected" });
+    expect(status("connecting")).toEqual({ kind: "on", text: "Connecting…" });
+    expect(status("available")).toEqual({ kind: "on", text: "Not connected" });
+    expect(status("error")).toEqual({ kind: "on", text: "Connection failed" });
   });
 });

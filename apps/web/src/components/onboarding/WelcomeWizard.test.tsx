@@ -166,10 +166,10 @@ it("keeps a failed Turn on error on its Off row without changing selection", asy
   const continueButton = [...document.querySelectorAll("button")].find(
     (button) => button.textContent?.trim() === "Continue",
   );
-  for (const row of rows) {
-    expect(row.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("true");
-    expect(row.textContent).toContain("Off");
-  }
+  const selection = () =>
+    rows.map((row) => row.querySelector('[role="checkbox"]')?.getAttribute("aria-checked"));
+  const selectionBefore = selection();
+  for (const row of rows) expect(row.textContent).toContain("Off");
   expect(continueButton?.disabled).toBe(true);
 
   await click("Turn on", failedRow!);
@@ -181,10 +181,8 @@ it("keeps a failed Turn on error on its Off row without changing selection", asy
   expect(failedRow!.querySelector('[role="alert"]')?.textContent).toBe("Could not enable Computer");
   expect(otherRow!.querySelector('[role="alert"]')).toBeNull();
   expect(otherRow!.textContent).not.toContain("Could not enable Computer");
-  for (const row of rows) {
-    expect(row.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("true");
-    expect(row.textContent).toContain("Off");
-  }
+  expect(selection()).toEqual(selectionBefore);
+  for (const row of rows) expect(row.textContent).toContain("Off");
   expect(continueButton?.disabled).toBe(true);
 });
 
