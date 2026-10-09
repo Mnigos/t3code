@@ -32,6 +32,8 @@ import { claudeNestedBackgroundSubagentWakeInput } from "./claude_nested_backgro
 import { assertClaudeNestedBackgroundSubagentWakeOutput } from "./claude_nested_background_subagent_wake/output.ts";
 import { claudeNestedSubagentModelInput } from "./claude_nested_subagent_model/input.ts";
 import { assertClaudeNestedSubagentModelOutput } from "./claude_nested_subagent_model/output.ts";
+import { claudeMcpToolPresentationInput } from "./claude_mcp_tool_presentation/input.ts";
+import { assertClaudeMcpToolPresentationOutput } from "./claude_mcp_tool_presentation/output.ts";
 import { claudeResultIsErrorInput } from "./claude_result_is_error/input.ts";
 import { assertClaudeResultIsErrorOutput } from "./claude_result_is_error/output.ts";
 import { grokAutoBlockedCommandInput } from "./grok_auto_blocked_command/input.ts";
@@ -54,6 +56,12 @@ import { assertCursorMessageSteeringOutput } from "./message_steering/cursor_out
 import { assertGrokMessageSteeringOutput } from "./message_steering/grok_output.ts";
 import { messageSteeringInput } from "./message_steering/input.ts";
 import { assertPiMessageSteeringOutput } from "./message_steering/pi_output.ts";
+import { MUSE_PERMISSION_DECLINED_FILE, musePermissionInput } from "./muse_permission/input.ts";
+import { assertMusePermissionOutput } from "./muse_permission/output.ts";
+import { museWorkflowInput } from "./muse_workflow/input.ts";
+import { assertMuseWorkflowOutput } from "./muse_workflow/output.ts";
+import { assertMuseMultiTurnOutput } from "./multi_turn/muse_output.ts";
+import { assertMuseTurnInterruptOutput } from "./turn_interrupt/muse_output.ts";
 import { piCompactionInput } from "./pi_compaction/input.ts";
 import { assertPiCompactionOutput } from "./pi_compaction/output.ts";
 import { providerThreadResumeInput } from "./provider_thread_resume/input.ts";
@@ -189,6 +197,7 @@ import {
   CODEX_MODEL_SELECTION,
   CURSOR_MODEL_SELECTION,
   GROK_MODEL_SELECTION,
+  MUSE_MODEL_SELECTION,
   OPENCODE_MODEL_SELECTION,
   OPENCODE2_MODEL_SELECTION,
   PI_MODEL_SELECTION,
@@ -422,6 +431,21 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     ],
   },
   {
+    name: "claude_mcp_tool_presentation",
+    buildInput: claudeMcpToolPresentationInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        transcriptFile: new URL(
+          "./claude_mcp_tool_presentation/claude_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CLAUDE_MODEL_SELECTION,
+        assertOutput: assertClaudeMcpToolPresentationOutput,
+      },
+    ],
+  },
+  {
     name: "claude_idle_resume",
     buildInput: claudeIdleResumeInput,
     providers: [
@@ -610,6 +634,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./simple/pi_transcript.ndjson", import.meta.url),
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertPiSimpleOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("muse"),
+        transcriptFile: new URL("./simple/muse_transcript.ndjson", import.meta.url),
+        modelSelection: MUSE_MODEL_SELECTION,
+        assertOutput: assertSimpleOutput,
       },
     ],
   },
@@ -1176,6 +1206,38 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertPiMultiTurnOutput,
       },
+      {
+        driver: ProviderDriverKind.make("muse"),
+        transcriptFile: new URL("./multi_turn/muse_transcript.ndjson", import.meta.url),
+        modelSelection: MUSE_MODEL_SELECTION,
+        assertOutput: assertMuseMultiTurnOutput,
+      },
+    ],
+  },
+  {
+    name: "muse_permission",
+    buildInput: musePermissionInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("muse"),
+        transcriptFile: new URL("./muse_permission/muse_transcript.ndjson", import.meta.url),
+        modelSelection: MUSE_MODEL_SELECTION,
+        expectedAbsentWorkspacePaths: [MUSE_PERMISSION_DECLINED_FILE],
+        assertOutput: assertMusePermissionOutput,
+      },
+    ],
+  },
+  {
+    name: "muse_workflow",
+    buildInput: museWorkflowInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("muse"),
+        transcriptFile: new URL("./muse_workflow/muse_transcript.ndjson", import.meta.url),
+        modelSelection: MUSE_MODEL_SELECTION,
+        runContinuationWorker: true,
+        assertOutput: assertMuseWorkflowOutput,
+      },
     ],
   },
   {
@@ -1441,6 +1503,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: OPENCODE_MODEL_SELECTION,
         runtimePolicyOverride: WORKSPACE_NEVER_POLICY,
         assertOutput: assertTurnInterruptOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("muse"),
+        transcriptFile: new URL("./turn_interrupt/muse_transcript.ndjson", import.meta.url),
+        modelSelection: MUSE_MODEL_SELECTION,
+        assertOutput: assertMuseTurnInterruptOutput,
       },
     ],
   },
