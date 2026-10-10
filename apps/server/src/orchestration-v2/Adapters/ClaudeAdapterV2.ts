@@ -8326,9 +8326,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
     return yield* makeClaudeAdapterV2({
       instanceId,
       settings: { ...config, enabled, binaryPath },
-      // Claude 5 models only get TaskCreate/TaskUpdate/TaskList (their
-      // replacement for TodoWrite) when opted in. An explicit value wins.
-      environment: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1", ...claudeEnvironment },
+      environment: claudeEnvironment,
       attachmentsDir: serverConfig.attachmentsDir,
       fileSystem,
       path,

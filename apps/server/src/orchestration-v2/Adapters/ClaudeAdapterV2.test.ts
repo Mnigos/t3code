@@ -1176,18 +1176,18 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
 
 describe("ClaudeAdapterV2 executable path", () => {
   it.effect.each([
-    { source: "default", environment: [], hostEnvironment: {}, expected: "1" },
+    { source: "the default", environment: [], hostEnvironment: {}, expected: undefined },
     {
-      source: "instance opt-out",
-      environment: [{ name: "CLAUDE_CODE_ENABLE_TODO_TOOLS", value: "0", sensitive: false }],
+      source: "an instance opt-in",
+      environment: [{ name: "CLAUDE_CODE_ENABLE_TODO_TOOLS", value: "1", sensitive: false }],
       hostEnvironment: {},
-      expected: "0",
+      expected: "1",
     },
     {
-      source: "host opt-out",
+      source: "a host opt-in",
       environment: [],
-      hostEnvironment: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "0" },
-      expected: "0",
+      hostEnvironment: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" },
+      expected: "1",
     },
   ])("expands the executable path and respects $source for task tools", (testCase) =>
     Effect.scoped(
