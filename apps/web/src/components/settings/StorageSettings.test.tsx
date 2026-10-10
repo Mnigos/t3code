@@ -38,6 +38,7 @@ vi.mock("./settingsLayout", () => ({
   SettingsSection: ({ children }: { children: ReactNode }) => children,
   SettingsRow: ({ control }: { control: ReactNode }) => <div>{control}</div>,
   SettingResetButton: () => null,
+  useRelativeTimeTick: () => {},
 }));
 
 import { StorageSettingsPanel } from "./StorageSettings";
