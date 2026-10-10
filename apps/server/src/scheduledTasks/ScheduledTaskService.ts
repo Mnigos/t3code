@@ -45,6 +45,8 @@ import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { forkParked } from "../serverActivation.ts";
+import { makeRunOutcomes, type RunOutcome } from "./RunOutcomes.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -359,7 +361,7 @@ export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(funct
   const rows = yield* sql<ScheduledTaskRow>`
     SELECT * FROM scheduled_tasks
     WHERE enabled = 1 AND next_run_at IS NOT NULL
-      AND next_run_at <= ${iso(now)} AND last_run_status <> 'running'
+      AND next_run_at <= ${iso(now)}
     ORDER BY next_run_at ASC, task_id ASC
   `;
   const tasks: ScheduledTask[] = [];
@@ -630,14 +632,16 @@ export const layer = Layer.effect(
 
     // Run-state transitions use targeted UPDATEs (never the full-row upsert) so
     // a completing run cannot resurrect a deleted task or clobber concurrent
-    // edits to the task definition.
+    // edits to the task definition. A run is counted here, in the same write
+    // that reserves it, so no later step or crash can count it twice.
     const markRunning = (id: ScheduledTaskId, startedAtIso: string) =>
       sql<{ task_id: string }>`
         UPDATE scheduled_tasks
         SET updated_at = ${startedAtIso},
             last_run_at = ${startedAtIso},
             last_run_status = 'running',
-            last_run_error = NULL
+            last_run_error = NULL,
+            run_count = run_count + 1
         WHERE task_id = ${id}
         RETURNING task_id
       `.pipe(
@@ -663,8 +667,7 @@ export const layer = Layer.effect(
         SET updated_at = ${input.completedAtIso},
             next_run_at = ${input.nextRunAtIso},
             last_run_status = ${input.status},
-            last_run_error = ${input.error},
-            run_count = run_count + 1
+            last_run_error = ${input.error}
         WHERE task_id = ${input.id}
           AND last_run_status = 'running'
           AND last_run_at = ${input.startedAtIso}
@@ -674,12 +677,68 @@ export const layer = Layer.effect(
         ),
       );
 
+    // A dispatched run stays 'running' until its turn ends; only the schedule
+    // moves on now. Not guarded on the status, because a fast turn may already
+    // have recorded its outcome.
+    const markDispatched = (input: {
+      readonly id: ScheduledTaskId;
+      readonly completedAtIso: string;
+      readonly nextRunAtIso: string | null;
+      readonly startedAtIso: string;
+    }) =>
+      sql`
+        UPDATE scheduled_tasks
+        SET updated_at = ${input.completedAtIso},
+            next_run_at = ${input.nextRunAtIso}
+        WHERE task_id = ${input.id}
+          AND last_run_at = ${input.startedAtIso}
+      `.pipe(
+        Effect.mapError((cause) =>
+          taskError("Could not record schedule task run.", { taskId: input.id, cause }),
+        ),
+      );
+
+    // "succeeded" means the dispatched turn completed, not that it was
+    // accepted. A newer run of the task supersedes this one's outcome.
+    const runOutcomes = makeRunOutcomes();
+    const recordRunOutcome = (outcome: RunOutcome) =>
+      Effect.gen(function* () {
+        const now = yield* localNow;
+        yield* sql`
+          UPDATE scheduled_tasks
+          SET updated_at = ${iso(now)},
+              last_run_status = ${outcome.status},
+              last_run_error = ${outcome.error}
+          WHERE task_id = ${outcome.taskId}
+            AND last_run_status = 'running'
+            AND last_run_at = ${outcome.startedAtIso}
+        `;
+        yield* notifyChanged;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not record scheduled run outcome", {
+            taskId: outcome.taskId,
+            cause,
+          }),
+        ),
+      );
+    yield* forkParked(
+      Stream.runForEach(threadManagement.streamDomainEvents, (event) => {
+        const outcome = runOutcomes.observe(event);
+        return outcome === null ? Effect.void : recordRunOutcome(outcome);
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Scheduled run outcome stream failed", { cause }),
+        ),
+      ),
+    );
+
     // Best-effort escape hatch: if anything fails between markRunning and
-    // markCompleted, write a full terminal record so runDueTasks neither skips
-    // the task forever (it filters out 'running' rows) nor re-fires it
-    // immediately: the dispatch may already have gone out, so next_run_at must
-    // advance and run_count must count the attempt.
-    const releaseStuckRun = (task: ScheduledTask, message: string) =>
+    // markCompleted, write a full terminal record so the task is neither left
+    // 'running' with no turn to settle it nor re-fired immediately: the
+    // dispatch may already have gone out, so next_run_at must advance.
+    // Guarded by the run's start so it never settles an earlier run's turn.
+    const releaseStuckRun = (task: ScheduledTask, startedAtIso: string, message: string) =>
       Effect.gen(function* () {
         const now = yield* localNow;
         // Compute the next occurrence from the current row so a schedule
@@ -693,9 +752,10 @@ export const layer = Layer.effect(
           SET last_run_status = 'failed',
               last_run_error = ${message},
               next_run_at = ${nextRunAt(source, now)},
-              updated_at = ${iso(now)},
-              run_count = run_count + 1
-          WHERE task_id = ${task.id} AND last_run_status = 'running'
+              updated_at = ${iso(now)}
+          WHERE task_id = ${task.id}
+            AND last_run_status = 'running'
+            AND last_run_at = ${startedAtIso}
         `;
         yield* notifyChanged;
       }).pipe(
@@ -725,6 +785,8 @@ export const layer = Layer.effect(
         return task;
       }
 
+      // Set once this run has reserved the row, so a failure is released on it.
+      let reservedAtIso: string | null = null;
       return yield* Effect.gen(function* () {
         const startedAt = yield* localNow;
         const startedAtIso = iso(startedAt);
@@ -774,6 +836,7 @@ export const layer = Layer.effect(
         }
 
         yield* markRunning(active.id, startedAtIso);
+        reservedAtIso = startedAtIso;
         yield* notifyChanged;
 
         // A webhook run is keyed by its delivery so the same delivery can
@@ -788,6 +851,8 @@ export const layer = Layer.effect(
         // after the poll read are honoured. A webhook prompt was rendered
         // from the row when the request arrived.
         const prompt = webhook?.prompt ?? active.prompt;
+        // Tracked before dispatch so a turn that ends at once is not missed.
+        runOutcomes.track(messageId, active.id, startedAtIso);
 
         // Effect.exit (not Effect.result) so defects and interruptions in the
         // dispatch are also captured and recorded as a failed run instead of
@@ -832,7 +897,9 @@ export const layer = Layer.effect(
 
         const completedAt = yield* localNow;
         const runSucceeded = result._tag === "Success";
-        const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
+        if (!runSucceeded) runOutcomes.forget(messageId);
+        // A dispatched run is 'running' until its turn ends (see runOutcomes).
+        const lastRunStatus = runSucceeded ? ("running" as const) : ("failed" as const);
         const lastRunError = runSucceeded ? null : errorMessage(result.cause);
         // Re-read the task so the next run is computed from the schedule as it
         // is *now* (the user may have edited or deleted it while we ran).
@@ -845,25 +912,37 @@ export const layer = Layer.effect(
           nextRunAt: nextRunAt(scheduleSource, completedAt),
           lastRunStatus,
           lastRunError,
-          runCount: scheduleSource.runCount + 1,
+          // The re-read already counts this run (see markRunning).
+          runCount: current?.runCount ?? task.runCount + 1,
         };
         if (current !== null) {
           // startedAtIso in the guard ensures this writes only to the row this
           // run marked as running — a task deleted mid-run and recreated with
           // the same id (idempotent commandId replay) must not be stamped.
-          yield* markCompleted({
-            id: task.id,
-            completedAtIso: completed.updatedAt,
-            nextRunAtIso: completed.nextRunAt,
-            status: lastRunStatus,
-            error: lastRunError,
-            startedAtIso,
-          });
+          yield* lastRunStatus === "running"
+            ? markDispatched({
+                id: task.id,
+                completedAtIso: completed.updatedAt,
+                nextRunAtIso: completed.nextRunAt,
+                startedAtIso,
+              })
+            : markCompleted({
+                id: task.id,
+                completedAtIso: completed.updatedAt,
+                nextRunAtIso: completed.nextRunAt,
+                status: lastRunStatus,
+                error: lastRunError,
+                startedAtIso,
+              });
           yield* notifyChanged;
         }
         return completed;
       }).pipe(
-        Effect.onError((cause) => releaseStuckRun(task, errorMessage(cause))),
+        Effect.onError((cause) =>
+          reservedAtIso === null
+            ? Effect.void
+            : releaseStuckRun(task, reservedAtIso, errorMessage(cause)),
+        ),
         Effect.ensuring(
           Ref.update(activeRuns, (active) => {
             const next = new Set(active);
@@ -923,13 +1002,13 @@ export const layer = Layer.effect(
       );
     });
 
-    // Recover from a crash or hard shutdown mid-run: rows stuck in 'running'
-    // would otherwise be skipped by the due-task filter forever. The dispatch
-    // may already have gone out before the crash, so next_run_at must advance
-    // and run_count must count the attempt — otherwise the first poll after
-    // every restart re-fires the interrupted task (same rationale as
-    // releaseStuckRun). Schedules are JSON, so this is per-row Effect work
-    // rather than a single UPDATE.
+    // Recover from a crash or hard shutdown mid-run: rows left 'running' have
+    // no turn outcome to settle them, since pending runs are tracked in
+    // memory. The dispatch may already have gone out before the crash, so
+    // next_run_at must advance — otherwise the first poll after every restart
+    // re-fires the interrupted task (same rationale as releaseStuckRun). The
+    // run was already counted when markRunning reserved it. Schedules are
+    // JSON, so this is per-row Effect work rather than a single UPDATE.
     yield* Effect.gen(function* () {
       const rows = yield* selectAllRows();
       const stuck = rows.filter((row) => row.last_run_status === "running");
@@ -946,8 +1025,7 @@ export const layer = Layer.effect(
                 SET last_run_status = 'failed',
                     last_run_error = 'Run was interrupted by a server restart.',
                     next_run_at = ${nextRunAt(decoded.success, now)},
-                    updated_at = ${iso(now)},
-                    run_count = run_count + 1
+                    updated_at = ${iso(now)}
                 WHERE task_id IS ${row.task_id} AND last_run_status = 'running'
               `;
               return;
@@ -963,8 +1041,7 @@ export const layer = Layer.effect(
               UPDATE scheduled_tasks
               SET last_run_status = 'failed',
                   last_run_error = 'Run was interrupted by a server restart.',
-                  updated_at = ${iso(now)},
-                  run_count = run_count + 1
+                  updated_at = ${iso(now)}
               WHERE task_id IS ${row.task_id} AND last_run_status = 'running'
             `;
           }),
@@ -1140,6 +1217,7 @@ export const layer = Layer.effect(
       deleteRow(input.id).pipe(
         Effect.andThen(
           Effect.all([
+            Effect.sync(() => runOutcomes.forgetTask(input.id)),
             Ref.update(webhookRateWindows, (windows) => {
               const next = new Map(windows);
               next.delete(input.id);

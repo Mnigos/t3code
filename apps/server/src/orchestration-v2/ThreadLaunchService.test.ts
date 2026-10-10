@@ -335,7 +335,8 @@ it.effect.each(
         creationSource: createdBy === "agent" ? "mcp" : "web",
       });
       const result = yield* tasks.runNow({ id: task.id });
-      assert.equal(result.task.lastRunStatus, "succeeded");
+      // Dispatched; the task records the turn's outcome when it ends.
+      assert.equal(result.task.lastRunStatus, "running");
       const projectThreads = yield* threads.listProjectThreads({
         projectId,
         includeSubagents: false,

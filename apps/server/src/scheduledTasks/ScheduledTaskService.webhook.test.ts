@@ -3,7 +3,11 @@ import * as NodeCrypto from "node:crypto";
 
 import * as NodePlatformCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
-import { ScheduledTaskUpsertInput, SecretRequestError } from "@t3tools/contracts";
+import {
+  ScheduledTaskUpsertInput,
+  SecretRequestError,
+  type OrchestrationV2DomainEvent,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -13,6 +17,7 @@ import * as Metric from "effect/Metric";
 import * as Queue from "effect/Queue";
 import * as EffectScheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
@@ -70,12 +75,15 @@ const withService = <A, E>(
     readonly launches: Queue.Queue<LaunchInput>;
     /** Secrets the user entered for an agent, by ref; consuming one removes it. */
     readonly secretsByRef: Map<string, string>;
+    /** Orchestration events the service observes for run outcomes. */
+    readonly runEvents: Queue.Queue<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<A, E, never>,
   options: { readonly gate?: Deferred.Deferred<void>; readonly relayHookBaseUrl?: string } = {},
 ) =>
   Effect.gen(function* () {
     const launches = yield* Queue.unbounded<LaunchInput>();
     const secretsByRef = new Map<string, string>();
+    const runEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
     const layerDependencies = Layer.mergeAll(
       NodePlatformCrypto.layer,
       Scheduler.layer,
@@ -86,7 +94,9 @@ const withService = <A, E>(
             Effect.as({ threadId: "thread-1", resumed: false } as never),
           ),
       }),
-      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        streamDomainEvents: Stream.fromQueue(runEvents),
+      }),
       Layer.mock(SecretRequests.SecretRequests)({
         consume: ({ ref }) => {
           const value = secretsByRef.get(ref);
@@ -103,7 +113,7 @@ const withService = <A, E>(
     );
     return yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
-      return yield* body({ service, launches, secretsByRef });
+      return yield* body({ service, launches, secretsByRef, runEvents });
     }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory));
 
@@ -138,6 +148,47 @@ it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
       });
       assert.equal(delivery.body, new TextDecoder().decode(pullRequestBody));
       assert.equal(delivery.renderedPrompt, launched.initialMessage?.text);
+    }),
+  ),
+);
+
+it.effect("records a webhook run's failed turn on the task, not on the accepted delivery", () =>
+  withService(({ service, launches, runEvents }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      yield* service.triggerWebhook(requestFor(task));
+      const messageId = (yield* Queue.take(launches)).initialMessage!.messageId;
+      yield* Queue.offerAll(runEvents, [
+        {
+          type: "run.created",
+          payload: { id: "run:hook", userMessageId: messageId, status: "starting" },
+        } as never,
+        {
+          type: "turn-item.updated",
+          payload: {
+            type: "error",
+            runId: "run:hook",
+            failure: { message: "You've hit your weekly usage limit." },
+          },
+        } as never,
+        {
+          type: "run.updated",
+          payload: { id: "run:hook", userMessageId: messageId, status: "failed" },
+        } as never,
+      ]);
+      const settled = yield* service.subscribeList().pipe(
+        Stream.map(({ tasks }) => tasks.find((candidate) => candidate.id === task.id)),
+        Stream.filter((candidate) => candidate?.lastRunStatus === "failed"),
+        Stream.runHead,
+      );
+      assert.equal(settled._tag, "Some");
+      assert.equal(
+        settled._tag === "Some" ? settled.value?.lastRunError : null,
+        "You've hit your weekly usage limit.",
+      );
+      // The delivery was dispatched; the delivery log records dispatch, not the turn.
+      const { deliveries } = yield* service.listWebhookDeliveries({ id: task.id });
+      assert.equal(deliveries[0]?.outcome, "accepted");
     }),
   ),
 );
