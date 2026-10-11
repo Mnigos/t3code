@@ -1976,28 +1976,31 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
       yield* git(cwd, ["commit", "--allow-empty", "-m", "initial"]);
     });
 
-  /** A clone of an origin whose only (and default) branch is `branch`. */
-  const cloneWithOnlyBranch = (branch: string) =>
+  /** A clone of an origin whose default branch is `defaultBranch`, beside `otherBranches`. */
+  const cloneOf = (defaultBranch: string, otherBranches: ReadonlyArray<string> = []) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-mcp-schedule-" });
       const seed = path.join(root, "seed");
       yield* fileSystem.makeDirectory(seed);
-      yield* initRepository(seed, branch);
+      yield* initRepository(seed, defaultBranch);
+      for (const branch of otherBranches) yield* git(seed, ["branch", branch]);
       yield* git(root, ["clone", "--bare", "seed", "origin.git"]);
       yield* git(root, ["clone", "origin.git", "project"]);
       return path.join(root, "project");
     });
 
-  /** A repository with no remote, checked out at `branch` or detached. */
-  const localRepository = (checkout: { readonly branch: string } | "detached") =>
+  /** A repository with no remote on `branch`, or detached with no branch at all. */
+  const localRepository = (checkout: string | "detached") =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-mcp-schedule-" });
-      const branch = checkout === "detached" ? "main" : checkout.branch;
-      yield* initRepository(cwd, branch);
-      if (checkout === "detached") yield* git(cwd, ["checkout", "--detach"]);
+      yield* initRepository(cwd, checkout === "detached" ? "trunk" : checkout);
+      if (checkout === "detached") {
+        yield* git(cwd, ["checkout", "--detach"]);
+        yield* git(cwd, ["branch", "-D", "trunk"]);
+      }
       return cwd;
     });
 
@@ -2078,9 +2081,35 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
   const lastWorkspaceStrategy = (upserts: Ref.Ref<ReadonlyArray<ScheduledTaskUpsertInput>>) =>
     Ref.get(upserts).pipe(Effect.map((all) => all.at(-1)?.workspaceStrategy));
 
-  it.effect("branches from origin's default branch over the checked-out one, without main", () =>
+  const expectBase = (workspaceRoot: string, baseRef: string) =>
+    withService(workspaceRoot, (service, upserts) =>
+      Effect.gen(function* () {
+        yield* scheduleUnbound(service);
+        assert.deepStrictEqual(yield* lastWorkspaceStrategy(upserts), {
+          type: "worktree",
+          baseRef,
+          startFromOrigin: true,
+        });
+      }),
+    );
+
+  it.effect("keeps main when it exists, even if origin's default is another branch", () =>
     Effect.gen(function* () {
-      const workspaceRoot = yield* cloneWithOnlyBranch("master");
+      yield* expectBase(yield* cloneOf("develop", ["main"]), "main");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps main when only a local main branch exists", () =>
+    Effect.gen(function* () {
+      const workspaceRoot = yield* localRepository("trunk");
+      yield* git(workspaceRoot, ["branch", "main"]);
+      yield* expectBase(workspaceRoot, "main");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("without main, branches from origin's default over the checked-out branch", () =>
+    Effect.gen(function* () {
+      const workspaceRoot = yield* cloneOf("master");
       // Origin's default wins over whatever the project happens to have checked out.
       yield* git(workspaceRoot, ["checkout", "-b", "feature"]);
       yield* withService(workspaceRoot, (service, upserts) =>
@@ -2092,7 +2121,7 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
             startFromOrigin: true,
           });
 
-          // Unbinding an existing task again resolves the same default.
+          // Unbinding an existing task again resolves the same base.
           yield* service.updateScheduledTask(clientScope, {
             scheduledTaskId,
             bindToCurrentThread: false,
@@ -2109,51 +2138,25 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("keeps branching from main when main is the origin default branch", () =>
+  it.effect("without main or an origin default, branches from the checked-out branch", () =>
     Effect.gen(function* () {
-      const workspaceRoot = yield* cloneWithOnlyBranch("main");
-      yield* withService(workspaceRoot, (service, upserts) =>
-        Effect.gen(function* () {
-          yield* scheduleUnbound(service);
-          assert.deepStrictEqual(yield* lastWorkspaceStrategy(upserts), {
-            type: "worktree",
-            baseRef: "main",
-            startFromOrigin: true,
-          });
-        }),
-      );
+      yield* expectBase(yield* localRepository("trunk"), "trunk");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("falls back to the checked-out branch when origin has no default", () =>
+  it.effect("keeps main when the checkout is detached and nothing else names a base", () =>
     Effect.gen(function* () {
-      const workspaceRoot = yield* localRepository({ branch: "trunk" });
-      yield* withService(workspaceRoot, (service, upserts) =>
-        Effect.gen(function* () {
-          yield* scheduleUnbound(service);
-          assert.deepStrictEqual(yield* lastWorkspaceStrategy(upserts), {
-            type: "worktree",
-            baseRef: "trunk",
-            startFromOrigin: true,
-          });
-        }),
-      );
+      yield* expectBase(yield* localRepository("detached"), "main");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("keeps main when the checkout is detached and origin has no default", () =>
+  it.effect("keeps main for a project that is not a git repository", () =>
     Effect.gen(function* () {
-      const workspaceRoot = yield* localRepository("detached");
-      yield* withService(workspaceRoot, (service, upserts) =>
-        Effect.gen(function* () {
-          yield* scheduleUnbound(service);
-          assert.deepStrictEqual(yield* lastWorkspaceStrategy(upserts), {
-            type: "worktree",
-            baseRef: "main",
-            startFromOrigin: true,
-          });
-        }),
-      );
+      const fileSystem = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-mcp-schedule-",
+      });
+      yield* expectBase(workspaceRoot, "main");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -2161,7 +2164,7 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const workspaceRoot = yield* localRepository({ branch: "trunk" });
+      const workspaceRoot = yield* localRepository("trunk");
       // The driver refuses to read status while the index lock exists (raw git status would not).
       yield* fileSystem.writeFileString(path.join(workspaceRoot, ".git", "index.lock"), "");
       yield* withService(workspaceRoot, (service, upserts) =>

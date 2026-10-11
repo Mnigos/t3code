@@ -911,9 +911,11 @@ const make = Effect.gen(function* () {
   /**
    * Workspace strategy for a scheduled task created/updated over MCP: bound runs
    * post into the existing thread (the strategy is unused, keep root); unbound
-   * runs launch a fresh worktree per run from the base a manual worktree thread
-   * defaults to: origin's default branch, else the project's checked-out branch,
-   * else (detached HEAD or not a git repository) the previous default, main.
+   * runs launch a fresh worktree per run from main. Only when the project has no
+   * main (neither `origin/main` nor a local branch, the refs a run's launch
+   * falls back across) does it branch from origin's default branch, else the
+   * checked-out branch, else (detached HEAD or not a git repository) main. Every
+   * check reads local refs; nothing is fetched.
    */
   const scheduledTaskWorkspaceStrategy = (
     boundToThread: boolean,
@@ -922,6 +924,15 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (boundToThread) return { type: "root" };
       const { workspaceRoot } = yield* requireProject(projectId);
+      const hasMain =
+        (yield* git
+          .remoteBranchExists({ cwd: workspaceRoot, remoteName: "origin", refName: "main" })
+          .pipe(Effect.orElseSucceed(() => false))) ||
+        (yield* git.listLocalBranchNames(workspaceRoot).pipe(
+          Effect.map((branches) => branches.includes("main")),
+          Effect.orElseSucceed(() => false),
+        ));
+      if (hasMain) return { type: "worktree", baseRef: "main", startFromOrigin: true };
       const checkedOutBranch = git.statusDetailsLocal(workspaceRoot).pipe(
         Effect.map((status) => status.branch),
         Effect.mapError(() =>
