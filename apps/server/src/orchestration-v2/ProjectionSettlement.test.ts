@@ -76,11 +76,12 @@ const createRun = Effect.fn(function* (
   threadId: ThreadId,
   status: OrchestrationV2Run["status"] = "completed",
   ordinal = 1,
+  overrides: Partial<OrchestrationV2Run> = {},
 ) {
   const store = yield* ProjectionStore.ProjectionStoreV2;
   const runId = RunId.make(`run:${threadId}:${ordinal}`);
   yield* store.apply({
-    id: EventId.make(`event:${runId}`),
+    id: EventId.make(`event:${runId}:${status}`),
     type: "run.created",
     threadId,
     occurredAt: old,
@@ -100,6 +101,7 @@ const createRun = Effect.fn(function* (
       completedAt: ["completed", "rolled_back", "failed"].includes(status) ? old : null,
       checkpointId: null,
       contextHandoffId: null,
+      ...overrides,
     },
   });
   return runId;
@@ -139,6 +141,80 @@ const createItem = Effect.fn(function* (
     },
   });
 });
+
+const createNotice = Effect.fn(function* (
+  threadId: ThreadId,
+  runId: RunId,
+  needsAttention: boolean,
+) {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  yield* store.apply({
+    id: EventId.make(`event:notice:${runId}`),
+    type: "turn-item.updated",
+    threadId,
+    occurredAt: old,
+    payload: {
+      id: TurnItemId.make(`notice:${runId}`),
+      threadId,
+      runId,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 2,
+      type: "system_notice",
+      status: "completed",
+      title: null,
+      message: "Auto mode denied 1 action (Bash): blocked by the classifier.",
+      ...(needsAttention ? { needsAttention: true } : {}),
+      startedAt: old,
+      completedAt: old,
+      updatedAt: old,
+    },
+  });
+});
+
+it.effect.each([
+  ["sql", layerSql],
+  ["memory", ProjectionStore.layerMemory],
+] as const)(
+  "%s: a run that ended on denied actions holds settlement until another run starts",
+  ([, testLayer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const denied = yield* createThread("denied");
+      yield* createNotice(denied, yield* createRun(denied), true);
+      const notice = yield* createThread("plain-notice");
+      yield* createNotice(notice, yield* createRun(notice), false);
+      const retried = yield* createThread("retried");
+      yield* createNotice(retried, yield* createRun(retried), true);
+      yield* createRun(retried, "completed", 2);
+
+      // Follow-ups that never started keep the hold: a held queue, an
+      // ordinary queued message, and one cancelled before it started.
+      const waiting = yield* createThread("waiting-follow-ups");
+      yield* createNotice(waiting, yield* createRun(waiting), true);
+      yield* createRun(waiting, "queued", 2, { queueHeld: true });
+      yield* createRun(waiting, "queued", 3);
+      yield* createRun(waiting, "cancelled", 4, { startedAt: null });
+
+      const candidates = yield* store.getSettlementCandidates();
+      assert.deepEqual(
+        candidates.map((thread) => thread.id).toSorted(),
+        [notice, retried].toSorted(),
+      );
+      assert.deepEqual(yield* store.getSettlementCandidates(denied), []);
+      assert.deepEqual(yield* store.getSettlementCandidates(waiting), []);
+
+      // The held follow-up starts, so the user has moved on.
+      yield* createRun(waiting, "completed", 2, { startedAt: now, completedAt: now });
+      assert.deepEqual(
+        (yield* store.getSettlementCandidates(waiting)).map((thread) => thread.id),
+        [waiting],
+      );
+    }).pipe(Effect.provide(testLayer)),
+);
 
 it.effect.each([
   ["sql", layerSql],
@@ -459,8 +535,20 @@ it.effect(
       );
       assert.isTrue(queries.every(([query]) => !query.includes("COUNT(")));
       const pendingQuery = queries.find(([query]) =>
-        query.includes("FROM orchestration_v2_projection_turn_items"),
+        query.includes("FROM orchestration_v2_projection_turn_items i"),
       );
+      const candidateQuery = queries.find(([query]) =>
+        query.includes("FROM orchestration_v2_projection_turn_items notice"),
+      );
+      assert.isDefined(candidateQuery);
+      const candidatePlan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${candidateQuery![0]}`,
+        candidateQuery![1],
+      );
+      // The latest run's notices are an index lookup, not a history scan.
+      const noticeLookups = candidatePlan.filter((row) => row.detail.includes(" notice "));
+      assert.isNotEmpty(noticeLookups);
+      assert.isTrue(noticeLookups.every((row) => row.detail.startsWith("SEARCH notice USING")));
       assert.isDefined(pendingQuery);
       const metadata = yield* store.getThread(threadId);
       assert.equal(metadata.id, threadId);

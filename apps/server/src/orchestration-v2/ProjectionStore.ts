@@ -1375,6 +1375,31 @@ function buildVisibleTurnItems(input: {
 }
 
 /**
+ * The run whose needs-attention notices hold a thread out of auto-settlement:
+ * the one that started last. Queued runs, held or not, and runs cancelled
+ * before they started never release the hold; any run that starts does,
+ * including an automatic continuation. The SQL settlement query mirrors this.
+ */
+function attentionAnchorRunId(
+  runs: ReadonlyArray<OrchestrationV2ThreadProjection["runs"][number]>,
+): RunId | null {
+  let anchor: { readonly id: RunId; readonly ordinal: number; readonly at: number } | null = null;
+  for (const run of runs) {
+    if (run.startedAt === null) continue;
+    const at = DateTime.toEpochMillis(run.startedAt);
+    if (
+      anchor === null ||
+      at > anchor.at ||
+      (at === anchor.at &&
+        (run.ordinal > anchor.ordinal || (run.ordinal === anchor.ordinal && run.id > anchor.id)))
+    ) {
+      anchor = { id: run.id, ordinal: run.ordinal, at };
+    }
+  }
+  return anchor?.id ?? null;
+}
+
+/**
  * An agent waiting on a secret is waiting on the user just like a question,
  * so the shell reports it as pending user input. Secret requests have no
  * runtime request of their own; this stands one in for the shell summary
@@ -5519,6 +5544,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 SELECT 1 FROM orchestration_v2_projection_runtime_requests request
                 WHERE request.thread_id = t.thread_id AND request.status = 'pending'
               )
+              -- A needs-attention notice on the latest started run holds the
+              -- thread like a pending request; see attentionAnchorRunId.
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_turn_items notice
+                WHERE notice.thread_id = t.thread_id
+                  AND notice.run_id = (
+                    SELECT anchor.run_id FROM orchestration_v2_projection_runs anchor
+                    WHERE anchor.thread_id = t.thread_id
+                      AND json_extract(anchor.payload_json, '$.startedAt') IS NOT NULL
+                    ORDER BY json_extract(anchor.payload_json, '$.startedAt') DESC,
+                      anchor.ordinal DESC, anchor.run_id DESC
+                    LIMIT 1
+                  )
+                  AND notice.type = 'system_notice'
+                  AND json_extract(notice.payload_json, '$.needsAttention') = 1
+              )
             ORDER BY t.updated_at ASC, t.thread_id ASC
           `;
             if (rows.length === 0) return [];
@@ -6080,6 +6121,15 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 !runs.some(isActivityRunForShell) &&
                 !runtimeRequests.some((request) => request.status === "pending"),
             )
+            .filter(({ runs, turnItems }) => {
+              const anchorRunId = attentionAnchorRunId(runs);
+              return !turnItems.some(
+                (item) =>
+                  item.runId === anchorRunId &&
+                  item.type === "system_notice" &&
+                  item.needsAttention === true,
+              );
+            })
             .map((projection) => {
               const shell = threadShellFromProjection(projection);
               return {

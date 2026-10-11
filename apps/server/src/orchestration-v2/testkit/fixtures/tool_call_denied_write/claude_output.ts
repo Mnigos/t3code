@@ -41,4 +41,9 @@ export function assertToolCallDeniedWriteClaudeOutput(
   const writes = projection.turnItems.filter((item) => item.type === "file_change");
   assert.lengthOf(writes, 1);
   assert.equal(writes[0]?.status, "failed");
+  // The result lists this decline in permission_denials, but the user made it.
+  assert.deepEqual(
+    projection.turnItems.filter((item) => item.type === "system_notice"),
+    [],
+  );
 }

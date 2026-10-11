@@ -6,6 +6,7 @@ import {
 } from "@t3tools/shared/toolActivity";
 import { field, text } from "../unknownField.ts";
 import { readWorkflowAgentAnswers } from "../workflowAgentAnswers.ts";
+import { claudePermissionDenialNotice } from "./claudePermissionDenials.ts";
 import {
   CLAUDE_WORKFLOW_TASK_TYPE,
   hasClaudeWorkflowSnapshot,
@@ -2927,6 +2928,9 @@ interface ActiveClaudeTurnContext {
     >;
   };
   readonly toolCalls: Map<string, ActiveClaudeToolCall>;
+  // Error text of this turn's failed tool calls, by tool_use id: the only
+  // record of why Claude Code denied a call on its own.
+  readonly toolErrorTexts: Map<string, string>;
   readonly ignoredTaskIds: Set<string>;
   readonly announcedUsageLimits: Set<string>;
   authenticationFailureMessage: string | undefined;
@@ -3673,6 +3677,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // tool_use frame is handled, in whichever run that frame is routed
         // to (the prompt's turn, or the continuation that drains a wake).
         const heldProposedPlansByToolUseId = new Map<string, string>();
+        // Tool calls T3's permission callback denied, so a result's
+        // permission_denials can tell them from Claude Code's own denials.
+        const deniedByT3ToolUseIds = new Set<string>();
         const runtimeContext = yield* Effect.context<never>();
         const runPromise = Effect.runPromiseWith(runtimeContext);
 
@@ -7301,6 +7308,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           for (const { toolResult, output } of claudeToolResultEntriesFromMessage(message)) {
+            if (isClaudeToolResultError(toolResult)) {
+              context.toolErrorTexts.set(toolResult.tool_use_id, claudeSubagentResultText(output));
+            }
             const subagent = yield* resolveSubagentByToolUseId(context, toolResult.tool_use_id);
             const runHandles = parseClaudeWorkflowRunHandles(claudeNativeToolOutputValue(output));
             // Independent of the branches below: unlike the Agent tool, a
@@ -7615,6 +7625,54 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               resultFailure?.class === "usage_limit"
                 ? { ...resultFailure, resetAt: resetAt ?? resultFailure.resetAt ?? null }
                 : resultFailure;
+            const denialNotice = interrupted
+              ? null
+              : claudePermissionDenialNotice({
+                  denials: message.permission_denials ?? [],
+                  deniedByT3: deniedByT3ToolUseIds,
+                  toolErrorTexts: context.toolErrorTexts,
+                  permissionMode: claudeRuntimeQueryPolicyForRuntimePolicy(
+                    context.input.runtimePolicy,
+                  ).permissionMode,
+                });
+            for (const denial of message.permission_denials ?? []) {
+              deniedByT3ToolUseIds.delete(denial.tool_use_id);
+            }
+            if (denialNotice !== null) {
+              // The turn still completes. The notice keeps the thread out of
+              // auto-settlement until another run starts.
+              const nativeItemId = `permission-denials:${context.providerTurnId}`;
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CLAUDE_PROVIDER,
+                turnItem: {
+                  id: idAllocator.derive.turnItemFromProviderItem({
+                    driver: CLAUDE_PROVIDER,
+                    nativeItemId,
+                  }),
+                  threadId: context.input.threadId,
+                  runId: context.input.runId,
+                  nodeId: context.input.rootNodeId,
+                  providerThreadId: context.input.providerThread.id,
+                  providerTurnId: context.providerTurnId,
+                  nativeItemRef: {
+                    driver: CLAUDE_PROVIDER,
+                    nativeId: nativeItemId,
+                    strength: "weak",
+                  },
+                  parentItemId: null,
+                  ordinal: yield* resolveItemOrdinal(context, nativeItemId),
+                  type: "system_notice",
+                  status: "completed",
+                  title: denialNotice,
+                  message: denialNotice,
+                  needsAttention: true,
+                  startedAt: completedAt,
+                  completedAt,
+                  updatedAt: completedAt,
+                },
+              });
+            }
             yield* finalizeActiveTurn({
               context,
               status: interrupted ? "interrupted" : terminalStatusFromResult(message, failureHint),
@@ -8081,7 +8139,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         });
 
         const canUseTool: CanUseTool = (toolName, toolInput, callbackOptions) =>
-          runPromise(canUseToolEffect(toolName, toolInput, callbackOptions));
+          runPromise(
+            canUseToolEffect(toolName, toolInput, callbackOptions).pipe(
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  if (result.behavior === "deny") {
+                    deniedByT3ToolUseIds.add(callbackOptions.toolUseID);
+                  }
+                }),
+              ),
+            ),
+          );
 
         const onUserDialog: NonNullable<ClaudeQueryOptions["onUserDialog"]> = (
           request,
@@ -8480,6 +8548,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 blocks: new Map(),
               },
               toolCalls: new Map(),
+              toolErrorTexts: new Map(),
               ignoredTaskIds: new Set(),
               announcedUsageLimits: new Set(),
               authenticationFailureMessage: undefined,
