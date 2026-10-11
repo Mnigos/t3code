@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type GitCommandError,
   type RunId,
   isProviderAvailable,
   MessageId,
@@ -913,9 +914,10 @@ const make = Effect.gen(function* () {
    * post into the existing thread (the strategy is unused, keep root); unbound
    * runs launch a fresh worktree per run from main. Only when the project has no
    * main (neither `origin/main` nor a local branch, the refs a run's launch
-   * falls back across) does it branch from origin's default branch, else the
-   * checked-out branch, else (detached HEAD or not a git repository) main. Every
-   * check reads local refs; nothing is fetched.
+   * falls back across) does it branch from origin's default branch if that
+   * branch exists, else the checked-out branch, else (detached HEAD or not a git
+   * repository) main. Every check reads local refs; nothing is fetched. A git
+   * read that fails saves nothing, so a guessed base is never stored.
    */
   const scheduledTaskWorkspaceStrategy = (
     boundToThread: boolean,
@@ -923,32 +925,42 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<ScheduledTask["workspaceStrategy"], OrchestratorMcpFailure> =>
     Effect.gen(function* () {
       if (boundToThread) return { type: "root" };
-      const { workspaceRoot } = yield* requireProject(projectId);
-      const hasMain =
-        (yield* git
-          .remoteBranchExists({ cwd: workspaceRoot, remoteName: "origin", refName: "main" })
-          .pipe(Effect.orElseSucceed(() => false))) ||
-        (yield* git.listLocalBranchNames(workspaceRoot).pipe(
-          Effect.map((branches) => branches.includes("main")),
-          Effect.orElseSucceed(() => false),
-        ));
-      if (hasMain) return { type: "worktree", baseRef: "main", startFromOrigin: true };
-      const checkedOutBranch = git.statusDetailsLocal(workspaceRoot).pipe(
-        Effect.map((status) => status.branch),
-        Effect.mapError(() =>
-          failure(
-            "orchestration_error",
-            "Could not read the project's checked-out branch to pick a base branch; try again.",
-          ),
-        ),
+      const { workspaceRoot: cwd } = yield* requireProject(projectId);
+      const worktreeFrom = (baseRef: string) =>
+        ({ type: "worktree", baseRef, startFromOrigin: true }) as const;
+      const unreadable = failure(
+        "orchestration_error",
+        "Could not read the project's branches to pick a base branch; try again.",
       );
-      const baseRef =
-        (yield* git
-          .resolveDefaultBranchName(workspaceRoot, "origin")
-          .pipe(Effect.orElseSucceed(() => null))) ??
-        (yield* checkedOutBranch) ??
-        "main";
-      return { type: "worktree", baseRef, startFromOrigin: true };
+      const readGit = <A>(read: Effect.Effect<A, GitCommandError>) =>
+        read.pipe(Effect.mapError(() => unreadable));
+      const probe = yield* readGit(
+        git.execute({
+          operation: "OrchestratorMcpService.scheduledTaskBase",
+          cwd,
+          args: ["rev-parse", "--git-dir"],
+          allowNonZeroExit: true,
+        }),
+      );
+      if (probe.exitCode !== 0) {
+        if (probe.stderr.toLowerCase().includes("not a git repository")) {
+          return worktreeFrom("main");
+        }
+        return yield* unreadable;
+      }
+      const localBranches = yield* readGit(git.listLocalBranchNames(cwd));
+      const branchExists = (branch: string) =>
+        localBranches.includes(branch)
+          ? Effect.succeed(true)
+          : readGit(git.remoteBranchExists({ cwd, remoteName: "origin", refName: branch }));
+      if (yield* branchExists("main")) return worktreeFrom("main");
+      const originDefault = yield* readGit(git.resolveDefaultBranchName(cwd, "origin"));
+      // origin/HEAD can still name a branch deleted since; skip it then.
+      if (originDefault !== null && (yield* branchExists(originDefault))) {
+        return worktreeFrom(originDefault);
+      }
+      const { branch } = yield* readGit(git.statusDetailsLocal(cwd));
+      return worktreeFrom(branch ?? "main");
     });
 
   /** A client has no thread to inherit a model from, so it falls back to the project default. */

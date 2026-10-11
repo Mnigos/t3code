@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
   EnvironmentId,
+  GitCommandError,
   NodeId,
   type OrchestrationV2ThreadShell,
   type ScheduledTask,
@@ -2004,13 +2005,14 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
       return cwd;
     });
 
-  /** The service over a real git driver, recording every scheduled task upsert. */
+  /** The service over a real git driver (or `layerGit`), recording every scheduled task upsert. */
   const withService = <A, E>(
     workspaceRoot: string,
     body: (
       service: OrchestratorMcpService.OrchestratorMcpService["Service"],
       upserts: Ref.Ref<ReadonlyArray<ScheduledTaskUpsertInput>>,
     ) => Effect.Effect<A, E>,
+    layerGit: typeof layerRealGit = layerRealGit,
   ) =>
     Effect.gen(function* () {
       const upserts = yield* Ref.make<ReadonlyArray<ScheduledTaskUpsertInput>>([]);
@@ -2055,7 +2057,7 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
         }),
         Layer.mock(SecretRequests.SecretRequests)({}),
         ServerSettings.layerTest(),
-        layerRealGit,
+        layerGit,
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({
           list: () =>
             Ref.get(upserts).pipe(Effect.map((all) => ({ tasks: all.map(taskFromUpsert) }))),
@@ -2174,6 +2176,55 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
           assert.match(error.message, /try again/);
           assert.equal((yield* Ref.get(upserts)).length, 0);
         }),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("skips an origin default that no longer exists for the checked-out branch", () =>
+    Effect.gen(function* () {
+      const workspaceRoot = yield* cloneOf("master");
+      yield* git(workspaceRoot, ["checkout", "-b", "feature"]);
+      // origin/HEAD still names a branch deleted since the clone.
+      yield* git(workspaceRoot, [
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/gone",
+      ]);
+      yield* expectBase(workspaceRoot, "feature");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("fails retryably without saving a base when the branches cannot be listed", () =>
+    Effect.gen(function* () {
+      const workspaceRoot = yield* localRepository("trunk");
+      const layerGitFailingBranchList = Layer.effect(
+        GitVcsDriver.GitVcsDriver,
+        Effect.gen(function* () {
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          return GitVcsDriver.GitVcsDriver.of({
+            ...driver,
+            listLocalBranchNames: (cwd) =>
+              Effect.fail(
+                new GitCommandError({
+                  operation: "test.listLocalBranchNames",
+                  command: "git",
+                  cwd,
+                  detail: "fatal: unable to read refs",
+                }),
+              ),
+          });
+        }),
+      ).pipe(Layer.provide(layerRealGit));
+      yield* withService(
+        workspaceRoot,
+        (service, upserts) =>
+          Effect.gen(function* () {
+            const error = yield* scheduleUnbound(service).pipe(Effect.flip);
+            assert.equal(error.code, "orchestration_error");
+            assert.match(error.message, /try again/);
+            assert.equal((yield* Ref.get(upserts)).length, 0);
+          }),
+        layerGitFailingBranchList,
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
