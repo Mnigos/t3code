@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProviderInstanceId, type ModelSelection, type ServerConfig } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderInstanceId,
+  type ModelSelection,
+  type ServerConfig,
+} from "@t3tools/contracts";
 
 import {
   buildModelOptions,
@@ -52,6 +57,44 @@ describe("mobile model options", () => {
         ],
       },
     ]);
+  });
+
+  it("carries configured ACP identity into model and provider catalogs", () => {
+    const iconUrl = "https://cdn.agentclientprotocol.com/registry/v1/latest/antigravity-acp.svg";
+    const config = {
+      providers: [
+        {
+          instanceId: "acpRegistry_antigravity",
+          driver: "acpRegistry",
+          displayName: "Antigravity",
+          iconUrl,
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "default",
+              name: "Default",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    const [group] = groupByProvider(buildModelOptions(config, null));
+
+    expect(group).toMatchObject({
+      providerKey: "acpRegistry_antigravity",
+      providerLabel: "Antigravity",
+      models: [
+        {
+          providerDriver: "acpRegistry",
+          providerIconUrl: iconUrl,
+        },
+      ],
+    });
   });
 
   it("distinguishes same-name OpenCode models without changing their routing", () => {
@@ -146,6 +189,13 @@ describe("mobile model options", () => {
     expect(option?.capabilities?.optionDescriptors?.[0]?.id).toBe("serviceTier");
     expect(option?.selection.options).toBeUndefined();
 
+    const [emptyOption] = buildModelOptions(config, {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-test",
+      options: [],
+    });
+    expect(emptyOption?.selection).toEqual(option?.selection);
+
     const [explicitOption] = buildModelOptions(config, {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-test",
@@ -153,6 +203,56 @@ describe("mobile model options", () => {
     });
     expect(explicitOption?.selection.options).toEqual([{ id: "serviceTier", value: "priority" }]);
   });
+
+  it("limits existing threads to their provider while new tasks keep every provider", () => {
+    const providers = ["codex", "claudeAgent"].map((instanceId) => ({
+      instanceId,
+      driver: instanceId,
+      enabled: true,
+      installed: true,
+      auth: { status: "authenticated" },
+      models: [{ slug: "test", name: instanceId, capabilities: null }],
+    }));
+    const config = { providers } as unknown as ServerConfig;
+    const selection = { instanceId: ProviderInstanceId.make("codex"), model: "test" };
+
+    expect(buildModelOptions(config, selection).map((option) => option.providerKey)).toEqual([
+      "codex",
+      "claudeAgent",
+    ]);
+    expect(buildModelOptions(config, selection, selection.instanceId)).toEqual(
+      buildModelOptions(config, selection).filter((option) => option.providerKey === "codex"),
+    );
+  });
+
+  it.each(["disabled", "unavailable", "missing"] as const)(
+    "retains the selected %s provider's fallback in a filtered catalog",
+    (state) => {
+      const selection = {
+        instanceId: ProviderInstanceId.make("google_work"),
+        model: "saved-model",
+        options: [{ id: "native-option", value: "saved-choice" }],
+      };
+      const provider = {
+        instanceId: selection.instanceId,
+        driver: "antigravity",
+        displayName: "Google Work",
+        enabled: state !== "disabled",
+        installed: true,
+        availability: state === "unavailable" ? "unavailable" : "available",
+        auth: { status: "authenticated" },
+        models: [{ slug: selection.model, name: "Saved model", capabilities: null }],
+      };
+      const config = {
+        providers: state === "missing" ? [] : [provider],
+        settings: { providerInstances: { google_work: { driver: "antigravity" } } },
+      } as unknown as ServerConfig;
+      const options = buildModelOptions(config, selection, selection.instanceId);
+      expect(options).toEqual(buildModelOptions(config, selection));
+      expect(options).toHaveLength(1);
+      expect(options[0]).toMatchObject({ selection, isUnavailable: true });
+    },
+  );
 
   it("rejects stored selections whose provider is not usable", () => {
     const config = {
@@ -407,5 +507,92 @@ describe("mobile model options", () => {
         modelOptions: [unavailable],
       }),
     ).toBeNull();
+  });
+});
+
+describe("synchronized mobile model visibility", () => {
+  const provider = ProviderInstanceId.make("codex_work");
+  const other = ProviderInstanceId.make("codex_personal");
+  const models = [
+    { slug: "hidden", name: "Hidden", isCustom: false, capabilities: null },
+    { slug: "first", name: "First", isCustom: false, capabilities: null },
+    { slug: "second", name: "Second", isCustom: false, capabilities: null },
+    { slug: "custom", name: "Custom", isCustom: true, capabilities: null },
+  ];
+  const config = {
+    settings: {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerModelPreferences: {
+        [provider]: {
+          hiddenModels: ["hidden", "custom", "missing"],
+          modelOrder: ["second", "first"],
+        },
+      },
+    },
+    providers: [provider, other].map((instanceId) => ({
+      instanceId,
+      driver: "codex",
+      enabled: true,
+      installed: true,
+      auth: { status: "authenticated" },
+      models,
+    })),
+  } as unknown as ServerConfig;
+
+  it("applies server visibility and ordering independently to each provider instance", () => {
+    const options = buildModelOptions(config, null);
+    expect(
+      options
+        .filter((option) => option.providerKey === provider)
+        .map((option) => option.selection.model),
+    ).toEqual(["second", "first", "custom"]);
+    expect(
+      options
+        .filter((option) => option.providerKey === other)
+        .map((option) => option.selection.model),
+    ).toEqual(["hidden", "first", "second", "custom"]);
+  });
+
+  it("exposes hidden built-ins for management without offering custom visibility controls", () => {
+    const options = buildModelOptions(
+      config,
+      { instanceId: provider, model: "hidden" },
+      provider,
+      true,
+    );
+    expect(options.map((option) => option.selection.model)).toEqual([
+      "second",
+      "first",
+      "hidden",
+      "custom",
+    ]);
+    expect(options.find((option) => option.selection.model === "hidden")).toMatchObject({
+      isHidden: true,
+      canHide: true,
+    });
+    expect(options.find((option) => option.selection.model === "custom")).toMatchObject({
+      isHidden: false,
+      canHide: false,
+    });
+  });
+
+  it.each(["hidden", "missing"])("does not resurrect the hidden fallback %s", (model) => {
+    expect(
+      buildModelOptions(config, { instanceId: provider, model }, provider).map(
+        (option) => option.selection.model,
+      ),
+    ).toEqual(["second", "first", "custom"]);
+  });
+
+  it("keeps custom models visible and restores built-in models when the server clears hidden models", () => {
+    expect(
+      buildModelOptions(config, { instanceId: provider, model: "custom" }, provider).map(
+        (option) => option.selection.model,
+      ),
+    ).toContain("custom");
+    const cleared = { ...config, settings: { ...config.settings, providerModelPreferences: {} } };
+    expect(
+      buildModelOptions(cleared, null, provider).map((option) => option.selection.model),
+    ).toEqual(["hidden", "first", "second", "custom"]);
   });
 });

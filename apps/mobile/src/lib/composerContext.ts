@@ -8,12 +8,17 @@ import {
   OrchestrationMessageContext,
   type PullRequestContextMetadata,
   type ReviewCommentContextRecord,
+  type ScopedThreadRef,
+  type ThreadContextRecord,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import {
+  ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
   formatComposerContextReference,
+  isImageReferencesOnly,
   replaceComposerContextReferences,
+  sanitizeComposerContextLabel,
 } from "@t3tools/shared/composerContextReferences";
 import {
   collectComposerInlineTokens,
@@ -95,6 +100,20 @@ export function createComposerContextHistory() {
       records.delete(oldest);
     }
     return referencedComposerContext(text, { version: 1, records: [...records.values()] });
+  };
+}
+
+/** Same identity as web: one record per thread, so re-attaching reuses the chip. */
+export function threadComposerContext(ref: ScopedThreadRef, title: string): ThreadContextRecord {
+  const label = sanitizeComposerContextLabel(title, "thread");
+  return {
+    version: 1,
+    kind: "thread",
+    contextId: ComposerContextId.make(`thread_${ref.threadId}`),
+    label,
+    environmentId: ref.environmentId,
+    threadId: ref.threadId,
+    title: label,
   };
 }
 
@@ -212,12 +231,19 @@ export function reidentifyComposerContext(
   };
 }
 
-/** Keep queued records canonical; choose the wire format against the host at dispatch time. */
+/**
+ * Keep queued records canonical; choose the wire format against the host at dispatch time.
+ * An image-only prompt goes out as the attachment-only prompt web sends, so the agent is still
+ * asked to respond. The images stay in the message's attachments and context records.
+ */
 export function serializeComposerMessageForServer(
-  text: string,
+  composerText: string,
   context: OrchestrationMessageContext | undefined,
   supportsInlineMessageContext: boolean,
 ): { text: string; context?: OrchestrationMessageContext } {
+  const text = isImageReferencesOnly(composerText)
+    ? ATTACHMENT_ONLY_BOOTSTRAP_PROMPT
+    : composerText;
   return supportsInlineMessageContext
     ? { text, ...(context ? { context } : {}) }
     : { text: serializeLegacyContextMessage({ text, records: context?.records ?? [] }) };
