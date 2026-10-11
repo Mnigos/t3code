@@ -313,7 +313,11 @@ export interface AcpAdapterV2Flavor {
   ) => Effect.Effect<void>;
   /** Batch launches without child completion signals become idle when the root turn ends. */
   readonly subagentsIdleOnTurnCompletion?: boolean;
-  readonly supportsCompaction?: boolean;
+  /**
+   * Routes a bare `/compact` to the agent. `"advertised"` limits that to agents
+   * whose session advertised a `compact` command, for flavors that host many agents.
+   */
+  readonly supportsCompaction?: boolean | "advertised";
   readonly runtimeHarness?: string;
   readonly registerExtensions?: (
     context: AcpAdapterV2ExtensionContext,
@@ -1692,6 +1696,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveAcpTurn | null>(null);
         const activeSessionId = yield* Ref.make<string | null>(null);
+        const advertisedCommandsBySessionId = yield* Ref.make(
+          new Map<string, ReadonlySet<string>>(),
+        );
+        // Undefined until the session advertises its commands.
+        const compactAdvertised = (sessionId: string) =>
+          Effect.map(Ref.get(advertisedCommandsBySessionId), (current) =>
+            current.get(sessionId)?.has("compact"),
+          );
         const contextUsageBySessionId = yield* Ref.make(
           new Map<string, ThreadTokenUsageSnapshot>(),
         );
@@ -5485,6 +5497,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     clientTerminals.readOutputSnapshot,
                   );
             if (notification.update.sessionUpdate === "available_commands_update") {
+              const names = new Set(
+                notification.update.availableCommands.map((command) => command.name),
+              );
+              yield* Ref.update(advertisedCommandsBySessionId, (current) =>
+                new Map(current).set(notification.sessionId, names),
+              );
               yield* (
                 flavor.onAvailableCommandsUpdate?.(notification.update.availableCommands) ??
                   Effect.void
@@ -6614,9 +6632,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           const now = yield* DateTime.now;
           // Agents that report their own compaction_update already produced the
-          // compaction row; only synthesize one for agents that compact silently.
+          // compaction row; only synthesize one for agents that compact silently,
+          // and never for an agent that did not advertise `compact`.
           if (
-            flavor.supportsCompaction === true &&
+            (flavor.supportsCompaction === true ||
+              (flavor.supportsCompaction === "advertised" &&
+                (yield* compactAdvertised(context.nativeThreadId)) === true)) &&
             context.input.message.text.trim() === "/compact" &&
             context.input.message.attachments.length === 0 &&
             settledStatus === "completed" &&
@@ -7455,13 +7476,32 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               ),
           ),
           startTurn,
-          ...(flavor.supportsCompaction === true
+          ...(flavor.supportsCompaction === true || flavor.supportsCompaction === "advertised"
             ? {
-                compactThread: (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-                  startTurn({
+                compactThread: Effect.fn("AcpAdapterV2.compactThread")(function* (
+                  turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
+                ) {
+                  // Commands not advertised yet: send it, but finalizeTurn only
+                  // reports success once the agent advertises `compact`.
+                  if (
+                    flavor.supportsCompaction === "advertised" &&
+                    (yield* compactAdvertised(
+                      turnInput.providerThread.nativeThreadRef?.nativeId ?? "",
+                    )) === false
+                  ) {
+                    return yield* new ProviderAdapter.ProviderAdapterTurnStartError({
+                      driver,
+                      threadId: turnInput.threadId,
+                      providerThreadId: turnInput.providerThread.id,
+                      runId: turnInput.runId,
+                      cause: "This provider does not support context compaction.",
+                    });
+                  }
+                  return yield* startTurn({
                     ...turnInput,
                     message: { ...turnInput.message, text: "/compact" },
-                  }),
+                  });
+                }),
               }
             : {}),
           steerTurn: (turnInput) =>

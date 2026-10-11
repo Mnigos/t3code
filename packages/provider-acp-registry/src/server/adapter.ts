@@ -197,8 +197,8 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     driver: ACP_REGISTRY_PROVIDER,
     capabilities: AcpProviderCapabilitiesV2,
     promptFailure: (cause) => acpRegistryPromptFailure(registryAgentId, cause),
-    // The UI only offers Compact when the agent advertises a `compact` command.
-    supportsCompaction: true,
+    // Registry agents differ: only those advertising `compact` can compact.
+    supportsCompaction: "advertised",
     // Per-agent exceptions (Mistral Vibe, Devin, Copilot): see the note above
     // registerMistralVibeAcpExtensions before adding any more.
     ...(registryAgentId === "mistral-vibe"

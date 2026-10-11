@@ -18,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
@@ -292,11 +293,37 @@ describe("AcpRegistryAdapterV2", () => {
       },
     });
 
-    // A scripted ACP agent that receives a bare `/compact` prompt, optionally
-    // reports its own compaction, and ends the turn. Returns the compaction rows.
-    const compactThroughRegistry = Effect.fn("compactThroughRegistry")(function* (
-      agentReportsCompaction: boolean,
-    ) {
+    const promptEntries = (reportsCompaction: boolean) => [
+      {
+        type: "expect_outbound",
+        frame: {
+          kind: "request",
+          method: "session/prompt",
+          // The command leads the prompt; T3's runtime context follows it.
+          params: { sessionId, prompt: [{ type: "text", text: "/compact" }, "<any>"] },
+        },
+      },
+      ...(reportsCompaction
+        ? [compactionUpdate("in_progress"), compactionUpdate("completed")]
+        : []),
+      {
+        type: "emit_inbound",
+        frame: {
+          kind: "response",
+          method: "session/prompt",
+          result: { stopReason: "end_turn" },
+        },
+      },
+    ];
+
+    // A scripted ACP agent that advertises `commands` and, when they include
+    // `compact`, receives a bare `/compact` prompt, optionally reports its own
+    // compaction, and ends the turn. Returns the compaction rows or the start error.
+    const compactThroughRegistry = Effect.fn("compactThroughRegistry")(function* (input: {
+      readonly commands: ReadonlyArray<string>;
+      readonly agentReportsCompaction?: boolean;
+    }) {
+      const prompted = input.commands.includes("compact");
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -331,30 +358,27 @@ describe("AcpRegistryAdapterV2", () => {
               type: "expect_outbound",
               frame: { kind: "request", method: "session/new", params: "<any>" },
             },
+            // Advertised before session/new resolves, so the adapter knows the
+            // commands before /compact arrives.
+            {
+              type: "emit_inbound",
+              frame: {
+                kind: "notification",
+                method: "session/update",
+                params: {
+                  sessionId,
+                  update: {
+                    sessionUpdate: "available_commands_update",
+                    availableCommands: input.commands.map((name) => ({ name, description: name })),
+                  },
+                },
+              },
+            },
             {
               type: "emit_inbound",
               frame: { kind: "response", method: "session/new", result: { sessionId } },
             },
-            {
-              type: "expect_outbound",
-              frame: {
-                kind: "request",
-                method: "session/prompt",
-                // The command leads the prompt; T3's runtime context follows it.
-                params: { sessionId, prompt: [{ type: "text", text: "/compact" }, "<any>"] },
-              },
-            },
-            ...(agentReportsCompaction
-              ? [compactionUpdate("in_progress"), compactionUpdate("completed")]
-              : []),
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "response",
-                method: "session/prompt",
-                result: { stopReason: "end_turn" },
-              },
-            },
+            ...(prompted ? promptEntries(input.agentReportsCompaction === true) : []),
           ] as never,
         },
         ACP_REGISTRY_PROVIDER,
@@ -385,7 +409,7 @@ describe("AcpRegistryAdapterV2", () => {
         interactionMode: "default",
         cwd: replayDir,
       });
-      const compactionRows = yield* Effect.gen(function* () {
+      const outcome = yield* Effect.gen(function* () {
         const runtime = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-compact"),
@@ -399,47 +423,50 @@ describe("AcpRegistryAdapterV2", () => {
         });
         assert.isDefined(runtime.compactThread);
         const now = yield* DateTime.now;
-        yield* runtime.compactThread!({
-          appThread: {
-            createdBy: "user",
-            creationSource: "web",
-            id: threadId,
-            projectId: ProjectId.make("project-acp-registry-compact"),
-            title: "Compact",
-            providerInstanceId: instanceId,
+        const started = yield* Effect.result(
+          runtime.compactThread!({
+            appThread: {
+              createdBy: "user",
+              creationSource: "web",
+              id: threadId,
+              projectId: ProjectId.make("project-acp-registry-compact"),
+              title: "Compact",
+              providerInstanceId: instanceId,
+              modelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              activeProviderThreadId: providerThread.id,
+              lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+              forkedFrom: null,
+              createdAt: now,
+              updatedAt: now,
+              archivedAt: null,
+              settledOverride: null,
+              settledAt: null,
+              lastVisitedAt: null,
+              deletedAt: null,
+            },
+            threadId,
+            runId: RunId.make("run-compact"),
+            runOrdinal: 1,
+            providerTurnOrdinal: 1,
+            attemptId: RunAttemptId.make("attempt-compact"),
+            rootNodeId: NodeId.make("node-compact"),
+            providerThread,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: MessageId.make("message-compact"),
+              text: "/compact",
+              attachments: [],
+            },
             modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            activeProviderThreadId: providerThread.id,
-            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-            forkedFrom: null,
-            createdAt: now,
-            updatedAt: now,
-            archivedAt: null,
-            settledOverride: null,
-            settledAt: null,
-            lastVisitedAt: null,
-            deletedAt: null,
-          },
-          threadId,
-          runId: RunId.make("run-compact"),
-          runOrdinal: 1,
-          providerTurnOrdinal: 1,
-          attemptId: RunAttemptId.make("attempt-compact"),
-          rootNodeId: NodeId.make("node-compact"),
-          providerThread,
-          message: {
-            createdBy: "user",
-            creationSource: "web",
-            messageId: MessageId.make("message-compact"),
-            text: "/compact",
-            attachments: [],
-          },
-          modelSelection,
-          runtimePolicy,
-        });
+            runtimePolicy,
+          }),
+        );
+        if (Result.isFailure(started)) return started.failure;
         const events = yield* runtime.events.pipe(
           Stream.takeUntil((event) => event.type === "turn.terminal"),
           Stream.runCollect,
@@ -453,18 +480,31 @@ describe("AcpRegistryAdapterV2", () => {
         return [...rows.values()];
       }).pipe(Effect.scoped);
       yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, transcript);
-      return compactionRows;
+      return outcome;
     });
 
     it.effect("sends a bare /compact to the agent and shows its own compaction once", () =>
       Effect.gen(function* () {
-        assert.deepEqual(yield* compactThroughRegistry(true), ["Compact context"]);
+        assert.deepEqual(
+          yield* compactThroughRegistry({ commands: ["compact"], agentReportsCompaction: true }),
+          ["Compact context"],
+        );
       }).pipe(Effect.provide(layerTest), Effect.scoped),
     );
 
     it.effect("marks the context compacted when the agent compacts without reporting it", () =>
       Effect.gen(function* () {
-        assert.deepEqual(yield* compactThroughRegistry(false), ["Context compacted"]);
+        assert.deepEqual(yield* compactThroughRegistry({ commands: ["compact"] }), [
+          "Context compacted",
+        ]);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+    );
+
+    it.effect("refuses /compact without prompting an agent that does not advertise it", () =>
+      Effect.gen(function* () {
+        const outcome = yield* compactThroughRegistry({ commands: ["help"] });
+        assert.instanceOf(outcome, ProviderAdapter.ProviderAdapterTurnStartError);
+        assert.strictEqual(outcome.cause, "This provider does not support context compaction.");
       }).pipe(Effect.provide(layerTest), Effect.scoped),
     );
   });
