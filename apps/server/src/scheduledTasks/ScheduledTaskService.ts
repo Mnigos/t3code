@@ -1248,7 +1248,12 @@ export const layer = Layer.effect(
             taskError("Could not run schedule task.", { taskId: input.id, cause }),
           ),
         );
-        return { task: next };
+        if (next.lastRunStatus !== "running") return { task: next };
+        // A turn that ended before its dispatch was recorded has already
+        // stored its outcome. runTask itself keeps reporting the dispatch, so
+        // the webhook log never mistakes a failed turn for a failed start.
+        const stored = yield* findTask(input.id);
+        return { task: stored !== null && stored.lastRunAt === next.lastRunAt ? stored : next };
       });
 
     const rotateWebhookToken: ScheduledTaskService["Service"]["rotateWebhookToken"] = (input) =>

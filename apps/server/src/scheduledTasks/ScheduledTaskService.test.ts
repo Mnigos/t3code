@@ -591,7 +591,11 @@ it.effect("records an unbound run whose turn outcome lands before its dispatch i
           "2026-09-09T12:00:00.000Z",
         );
         const { task: returned } = yield* service.runNow({ id: ScheduledTaskId.make("unbound") });
-        assert.equal(returned.lastRunStatus, "running");
+        // runNow reports the outcome that was already recorded, not the dispatch.
+        assert.equal(returned.lastRunStatus, "failed");
+        assert.equal(returned.lastRunError, "The run failed.");
+        assert.isNotNull(returned.nextRunAt);
+        assert.equal(returned.runCount, 1);
         // markDispatched ran after the outcome and kept it, while still
         // moving the schedule on; the run is counted once.
         const row = yield* readRun(sql, "unbound");
