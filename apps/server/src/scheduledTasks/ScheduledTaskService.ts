@@ -45,7 +45,6 @@ import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
-import { forkParked } from "../serverActivation.ts";
 import { makeRunOutcomes, type RunOutcome } from "./RunOutcomes.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
@@ -722,15 +721,19 @@ export const layer = Layer.effect(
           }),
         ),
       );
-    yield* forkParked(
-      Stream.runForEach(threadManagement.streamDomainEvents, (event) => {
-        const outcome = runOutcomes.observe(event);
-        return outcome === null ? Effect.void : recordRunOutcome(outcome);
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Scheduled run outcome stream failed", { cause }),
-        ),
+    // Subscribed while the service builds, not parked until activation:
+    // routes serve (and runNow can dispatch) before activation opens, and the
+    // live tail only delivers events after its subscription cursor. The
+    // replaying stored-event stream would close that gap too, but it reads the
+    // whole event history on every boot.
+    yield* Stream.runForEach(threadManagement.streamDomainEvents, (event) => {
+      const outcome = runOutcomes.observe(event);
+      return outcome === null ? Effect.void : recordRunOutcome(outcome);
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Scheduled run outcome stream failed", { cause }),
       ),
+      Effect.forkScoped({ startImmediately: true }),
     );
 
     // Best-effort escape hatch: if anything fails between markRunning and

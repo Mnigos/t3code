@@ -19,6 +19,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -28,6 +29,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerActivation from "../serverActivation.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
@@ -720,4 +722,45 @@ it.effect("drops an earlier run's outcome once a newer run of the task starts", 
       assert.equal(task.runCount, 2);
     }),
   ),
+);
+
+it.effect("records the outcome of a run dispatched before the server is activated", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* insertRow(
+      sql,
+      { id: "bound", next: null, enabled: 1, status: "never", threadId: "thread:bound" },
+      "2026-09-09T12:00:00.000Z",
+    );
+    // A live tail, like streamDomainEvents: events published before the
+    // listener subscribes are never delivered to it.
+    const events = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
+    const dispatched = yield* Queue.unbounded<MessageId>();
+    // Routes serve before activation; this server is never activated.
+    const activation = yield* Deferred.make<void>();
+    const layer = ScheduledTaskService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            sendToThread: (input) =>
+              Queue.offer(dispatched, input.messageId).pipe(Effect.as({} as never)),
+            streamDomainEvents: Stream.fromPubSub(events),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          NodeCrypto.layer,
+          Scheduler.layer,
+          Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      yield* service.runNow({ id: ScheduledTaskId.make("bound") });
+      yield* PubSub.publish(events, runEvent(yield* Queue.take(dispatched), "failed"));
+      const task = yield* settledTask(service, "bound");
+      assert.equal(task.lastRunStatus, "failed");
+      assert.equal(task.lastRunError, "The run failed.");
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
