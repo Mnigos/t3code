@@ -39,7 +39,7 @@ vi.mock("../ui/toast", () => ({
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 const environmentId = EnvironmentId.make("remote");
 const threadId = ThreadId.make("thread");
-const task = {
+let task = {
   id: ScheduledTaskId.make("task"),
   threadId,
   title: "Daily review",
@@ -47,8 +47,10 @@ const task = {
   schedule: { type: "interval", everyMs: 60000 },
   lastRunStatus: "never",
 } as ScheduledTask;
+const idleTask = task;
 let renderer: ReactTestRenderer;
 beforeEach(() => {
+  task = idleTask;
   state.allowed = true;
   state.toggle.mockReset().mockResolvedValue({ _tag: "Success" });
   state.run.mockReset().mockResolvedValue({ _tag: "Success" });
@@ -81,4 +83,17 @@ it("rejects a retained toggle after task permission is revoked", async () => {
     await toggle.props.onCheckedChange(false);
   });
   expect(state.toggle).not.toHaveBeenCalled();
+});
+
+it("keeps Run now available while the last run's turn is still running", async () => {
+  task = { ...idleTask, lastRunStatus: "running" };
+  await act(async () => {
+    renderer = create(<ThreadAutomationsPanel environmentId={environmentId} threadId={threadId} />);
+  });
+  const run = renderer.root.findAllByProps({ "aria-label": "Run Daily review now" })[0]!;
+  expect(run.props.disabled).toBe(false);
+  await act(async () => {
+    await run.props.onClick();
+  });
+  expect(state.run).toHaveBeenCalledTimes(1);
 });

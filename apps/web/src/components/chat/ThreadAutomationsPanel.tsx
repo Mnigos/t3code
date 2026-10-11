@@ -214,9 +214,9 @@ export function ThreadAutomationsPanel(props: {
                       variant="ghost"
                       part="icon"
                       aria-label={`Run ${task.title} now`}
-                      disabled={
-                        !canOperate || busyTaskId !== null || task.lastRunStatus === "running"
-                      }
+                      // Like Settings, a turn still running from the last run
+                      // does not block a manual run.
+                      disabled={!canOperate || busyTaskId !== null}
                       onClick={() => void runNow(task)}
                     >
                       <PlayIcon className="size-3.5" />
