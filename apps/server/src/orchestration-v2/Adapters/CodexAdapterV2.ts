@@ -30,7 +30,8 @@ import {
   type ProviderSetupError,
 } from "@t3tools/contracts";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { AgentScope } from "@t3tools/shared/AgentScope";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -1357,8 +1358,16 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   readonly cwd?: string | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly extendEnv?: boolean | undefined;
+  readonly threadId?: string | undefined;
 }) {
-  const spawnCommand = yield* resolveSpawnCommand(input.command, input.args, {
+  const launch = yield* (yield* AgentScope).wrap({
+    command: input.command,
+    args: input.args,
+    name: "codex",
+    threadId: input.threadId,
+    env: input.env,
+  });
+  const spawnCommand = yield* resolveSpawnCommand(launch.command, launch.args, {
     ...(input.env === undefined ? {} : { env: input.env }),
     ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
   });
@@ -1495,6 +1504,7 @@ export const layerAppServerClientFactory: Layer.Layer<
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
+    const agentScope = yield* AgentScope;
 
     return CodexAppServerClientFactory.of({
       open: (input) =>
@@ -1510,7 +1520,8 @@ export const layerAppServerClientFactory: Layer.Layer<
               resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
             ),
             env: environment,
-          });
+            threadId: input.threadId,
+          }).pipe(Effect.provideService(AgentScope, agentScope));
           const handle = yield* spawner.spawn(command).pipe(
             Effect.provideService(Scope.Scope, scope),
             Effect.mapError(
@@ -1562,7 +1573,7 @@ export const createCodexAdapterV2 = (
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
-    const hostEnvironment = yield* HostProcessEnvironment;
+    const hostEnvironment = yield* HostProcess.Environment;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const serverConfig = yield* ServerConfig;
     const homeLayout = yield* resolveCodexHomeLayout(config);
@@ -1582,14 +1593,14 @@ export const createCodexAdapterV2 = (
     const settings = {
       ...config,
       enabled,
-      binaryPath: expandHomePath(config.binaryPath),
+      binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
 
     return yield* makeCodexAdapterV2({
       instanceId,
       settings,
-      environment: mergeProviderInstanceEnvironment(environment, hostEnvironment),
+      environment: yield* mergeProviderInstanceEnvironment(environment, hostEnvironment),
       clientFactory,
       crypto,
       fileSystem,
@@ -1623,7 +1634,7 @@ const layer: Layer.Layer<
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
-    const hostEnvironment = yield* HostProcessEnvironment;
+    const hostEnvironment = yield* HostProcess.Environment;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const serverConfig = yield* ServerConfig;
 
@@ -4965,15 +4976,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 node: artifacts.node,
               });
               yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
+              yield* emitProviderEvent({
                 type: "runtime_request.updated",
                 driver: CODEX_PROVIDER,
                 threadId: artifacts.node.threadId,
                 runtimeRequest: artifacts.request,
-              });
-              yield* emitProviderEvent({
-                type: "turn_item.updated",
-                driver: CODEX_PROVIDER,
-                turnItem: artifacts.turnItem,
               });
               yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
                 const ids = current.get(payload.turnId);
@@ -5072,15 +5083,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               node: artifacts.node,
             });
             yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            yield* emitProviderEvent({
               type: "runtime_request.updated",
               driver: CODEX_PROVIDER,
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
             });
 
             const resolved = yield* Deferred.await(decision).pipe(
@@ -5132,15 +5143,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               node: artifacts.node,
             });
             yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            yield* emitProviderEvent({
               type: "runtime_request.updated",
               driver: CODEX_PROVIDER,
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
             });
 
             const resolved = yield* Deferred.await(decision).pipe(
@@ -5193,15 +5204,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               node: artifacts.node,
             });
             yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            yield* emitProviderEvent({
               type: "runtime_request.updated",
               driver: CODEX_PROVIDER,
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
             });
 
             const resolved = yield* Deferred.await(decision).pipe(
@@ -5278,15 +5289,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               node: artifacts.node,
             });
             yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            yield* emitProviderEvent({
               type: "runtime_request.updated",
               driver: CODEX_PROVIDER,
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
             });
 
             const resolved = yield* Deferred.await(decision).pipe(
@@ -5337,15 +5348,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               node: artifacts.node,
             });
             yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            yield* emitProviderEvent({
               type: "runtime_request.updated",
               driver: CODEX_PROVIDER,
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
             });
 
             const resolved = yield* Deferred.await(decision).pipe(
@@ -5397,15 +5408,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               node: artifacts.node,
             });
             yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            yield* emitProviderEvent({
               type: "runtime_request.updated",
               driver: CODEX_PROVIDER,
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
             });
 
             const resolved = yield* Deferred.await(decision).pipe(
@@ -5455,15 +5466,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               node: artifacts.node,
             });
             yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            yield* emitProviderEvent({
               type: "runtime_request.updated",
               driver: CODEX_PROVIDER,
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
             });
 
             const resolved = yield* Deferred.await(answers).pipe(
