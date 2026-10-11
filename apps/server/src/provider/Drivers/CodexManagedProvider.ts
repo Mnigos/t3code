@@ -36,7 +36,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     instanceId,
     enabled,
     config,
-    environment: mergeProviderInstanceEnvironment(input.environment),
+    environment: yield* mergeProviderInstanceEnvironment(input.environment),
   });
   const continuationIdentity = codexContinuationIdentity(runtime.homeLayout);
   const stamp = withInstanceIdentity({
@@ -260,6 +260,8 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
       protect("generateBranchName", nativeGeneration.generateBranchName(value)),
     generateThreadTitle: (value) =>
       protect("generateThreadTitle", nativeGeneration.generateThreadTitle(value)),
+    generateReviewGuide: (value) =>
+      protect("generateReviewGuide", nativeGeneration.generateReviewGuide(value)),
   };
   return {
     instanceId,
