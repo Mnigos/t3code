@@ -65,26 +65,30 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
       });
     }
     // Grok ships through Homebrew only as a cask; a formula keg such as `node`
-    // holding an npm global is not Grok's owner.
-    const homebrew =
-      homebrewOwnershipFromCommandPath(context.realCommandPath)?.kind === "cask"
-        ? yield* resolveHomebrewProviderMaintenance(
-            { provider: DRIVER_KIND, packageName: GROK_NPM_PACKAGE },
-            context,
-          )
-        : null;
-    return (
-      homebrew ??
-      makeProviderMaintenanceCapabilities({
-        provider: DRIVER_KIND,
-        packageName: GROK_NPM_PACKAGE,
-        updateExecutable: context.resolvedCommandPath,
-        updateArgs: ["update"],
-        updateLockKey: "grok",
-        platform: context.platform,
-        env: context.env,
-      })
-    );
+    // holding an npm global is not Grok's owner. A cask the found `brew` cannot
+    // verify (none found, or another prefix) is still Homebrew's, so it stays
+    // manual rather than letting `grok update` install a second copy.
+    if (homebrewOwnershipFromCommandPath(context.realCommandPath)?.kind === "cask") {
+      return (
+        (yield* resolveHomebrewProviderMaintenance(
+          { provider: DRIVER_KIND, packageName: GROK_NPM_PACKAGE },
+          context,
+        )) ??
+        makeManualOnlyProviderMaintenanceCapabilities({
+          provider: DRIVER_KIND,
+          packageName: GROK_NPM_PACKAGE,
+        })
+      );
+    }
+    return makeProviderMaintenanceCapabilities({
+      provider: DRIVER_KIND,
+      packageName: GROK_NPM_PACKAGE,
+      updateExecutable: context.resolvedCommandPath,
+      updateArgs: ["update"],
+      updateLockKey: "grok",
+      platform: context.platform,
+      env: context.env,
+    });
   }),
 };
 

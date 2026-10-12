@@ -161,7 +161,7 @@ it.layer(layerTest)("GrokDriver", (it) => {
   });
 
   it.effect.skipIf(windowsHost)(
-    "keeps grok update for a cask-shaped path another brew prefix owns",
+    "stays manual-only for a cask-shaped path another brew prefix owns",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -186,11 +186,10 @@ it.layer(layerTest)("GrokDriver", (it) => {
         });
         const capabilities = yield* instance.snapshot.resolveMaintenance();
 
-        expect(capabilities.latestVersion).toBeUndefined();
-        expect(capabilities.update).toMatchObject({
-          executable: binaryPath,
-          args: ["update"],
-          lockKey: "grok",
+        expect(capabilities).toEqual({
+          provider: "grok",
+          packageName: "@xai-official/grok",
+          update: null,
         });
       }).pipe(
         Effect.provideService(
@@ -199,6 +198,40 @@ it.layer(layerTest)("GrokDriver", (it) => {
         ),
         Effect.scoped,
       ),
+  );
+
+  it.effect.skipIf(windowsHost)("stays manual-only for a cask-shaped path with no brew", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-grok-no-brew-" }),
+      );
+      const emptyBin = path.join(tempDir, "empty-bin");
+      const binaryPath = path.join(tempDir, "Caskroom", "grok-build", "1.2.3", "grok");
+      yield* fs.makeDirectory(emptyBin, { recursive: true });
+      yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+      yield* fs.writeFileString(binaryPath, "#!/bin/sh\n");
+      yield* fs.chmod(binaryPath, 0o755);
+
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-no-brew"),
+        displayName: "Grok test",
+        enabled: false,
+        // No keg-local brew and nothing on PATH, so no `brew` can be found.
+        environment: [{ name: "PATH", value: emptyBin, sensitive: false }],
+        config: { ...GrokDriver.defaultConfig(), binaryPath },
+      });
+
+      expect(yield* instance.snapshot.resolveMaintenance()).toEqual({
+        provider: "grok",
+        packageName: "@xai-official/grok",
+        update: null,
+      });
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
+      Effect.scoped,
+    ),
   );
 
   it.effect.skipIf(windowsHost)(
