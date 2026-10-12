@@ -2375,16 +2375,23 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
   const lastWorkspaceStrategy = (upserts: Ref.Ref<ReadonlyArray<ScheduledTaskUpsertInput>>) =>
     Ref.get(upserts).pipe(Effect.map((all) => all.at(-1)?.workspaceStrategy));
 
-  const expectBase = (workspaceRoot: string, baseRef: string) =>
-    withService(workspaceRoot, (service, upserts) =>
-      Effect.gen(function* () {
-        yield* scheduleUnbound(service);
-        assert.deepStrictEqual(yield* lastWorkspaceStrategy(upserts), {
-          type: "worktree",
-          baseRef,
-          startFromOrigin: true,
-        });
-      }),
+  const expectBase = (
+    workspaceRoot: string,
+    baseRef: string,
+    layerGit: typeof layerRealGit = layerRealGit,
+  ) =>
+    withService(
+      workspaceRoot,
+      (service, upserts) =>
+        Effect.gen(function* () {
+          yield* scheduleUnbound(service);
+          assert.deepStrictEqual(yield* lastWorkspaceStrategy(upserts), {
+            type: "worktree",
+            baseRef,
+            startFromOrigin: true,
+          });
+        }),
+      layerGit,
     );
 
   it.effect("keeps main when it exists, even if origin's default is another branch", () =>
@@ -2451,6 +2458,58 @@ describe("OrchestratorMcpService scheduled tasks that launch a fresh worktree pe
         prefix: "t3-mcp-schedule-",
       });
       yield* expectBase(workspaceRoot, "main");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps main for a project that is not a git repository on a German host", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-mcp-schedule-",
+      });
+      const localeKeys = ["LANG", "LC_ALL", "LANGUAGE"] as const;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const saved = localeKeys.map((key) => [key, process.env[key]] as const);
+          process.env.LANG = "de_DE.UTF-8";
+          process.env.LC_ALL = "de_DE.UTF-8";
+          process.env.LANGUAGE = "de";
+          return saved;
+        }),
+        (saved) =>
+          Effect.sync(() => {
+            for (const [key, value] of saved) {
+              if (value === undefined) Reflect.deleteProperty(process.env, key);
+              else process.env[key] = value;
+            }
+          }),
+      );
+      // Not every git build ships translations, so stand in for a German one:
+      // its diagnostics are German unless the call itself forces the C locale.
+      const layerGermanGit = Layer.effect(
+        GitVcsDriver.GitVcsDriver,
+        Effect.gen(function* () {
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          return GitVcsDriver.GitVcsDriver.of({
+            ...driver,
+            execute: (input) =>
+              driver.execute(input).pipe(
+                Effect.map((result) =>
+                  (input.env?.LC_ALL ?? process.env.LC_ALL) === "C"
+                    ? result
+                    : {
+                        ...result,
+                        stderr: result.stderr.replace(
+                          "not a git repository",
+                          "kein Git-Repository",
+                        ),
+                      },
+                ),
+              ),
+          });
+        }),
+      ).pipe(Layer.provide(layerRealGit));
+      yield* expectBase(workspaceRoot, "main", layerGermanGit);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

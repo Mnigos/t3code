@@ -942,6 +942,8 @@ const make = Effect.gen(function* () {
           cwd,
           args: ["rev-parse", "--git-dir"],
           allowNonZeroExit: true,
+          // English diagnostics on any host locale, so the stderr check below holds.
+          env: { LC_ALL: "C" },
         }),
       );
       if (probe.exitCode !== 0) {
