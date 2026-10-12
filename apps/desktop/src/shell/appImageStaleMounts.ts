@@ -1,4 +1,4 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off - Pure string normalization of env paths, no filesystem access.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Pure string normalization of env paths, no filesystem access.
 import * as NodePath from "node:path";
 
 // Search-path variables the AppImage runtime prepends its mount dir to.
