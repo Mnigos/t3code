@@ -22,8 +22,8 @@ import * as Stream from "effect/Stream";
 
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
-import * as Settings from "../../../serverSettings.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ProjectSettingsService from "../../../project/ProjectSettingsService.ts";
@@ -53,6 +53,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
     } as OrchestrationV2ThreadShell;
     let launchedSender: ThreadId | undefined;
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -125,6 +126,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
     } as OrchestrationV2ThreadShell;
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -223,8 +225,8 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       deletedAt: null,
     };
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
-      Settings.layerTest(),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
         requestNamespace: "session",
@@ -323,7 +325,7 @@ const projectSettingsInput = {
 };
 
 const makeProjectSettingsHarness = Effect.fn("makeProjectSettingsHarness")(function* (
-  settingsOverrides: Parameters<typeof Settings.layerTest>[0] = {},
+  settingsOverrides: Parameters<typeof ServerSettings.layerTest>[0] = {},
 ) {
   let project: ProjectRecord = {
     id: settingsProjectId,
@@ -341,9 +343,11 @@ const makeProjectSettingsHarness = Effect.fn("makeProjectSettingsHarness")(funct
   const creates: Project.ProjectCreateInput[] = [];
   const writes: ServerSettingsPatch[] = [];
   const settingsContext = yield* Layer.build(
-    Settings.layerTest({ projectSettingsFolded: true, ...settingsOverrides }),
+    ServerSettings.layerTest({ projectSettingsFolded: true, ...settingsOverrides }),
   );
-  const settings = yield* Settings.ServerSettingsService.pipe(Effect.provide(settingsContext));
+  const settings = yield* ServerSettings.ServerSettingsService.pipe(
+    Effect.provide(settingsContext),
+  );
   const caller = {
     id: ThreadId.make("source-thread"),
     projectId: settingsProjectId,
@@ -356,7 +360,7 @@ const makeProjectSettingsHarness = Effect.fn("makeProjectSettingsHarness")(funct
   } as OrchestrationV2ThreadShell;
   const layer = Layer.mergeAll(
     NodeCrypto.layer,
-    Layer.succeed(Settings.ServerSettingsService, {
+    Layer.succeed(ServerSettings.ServerSettingsService, {
       ...settings,
       updateSettings: (patch) => {
         writes.push(patch);
@@ -700,10 +704,13 @@ const clientLaunchHarness = (input: {
   readonly workspaceRoot?: string;
   /** The model on the project record; omitted means the harness's model. */
   readonly recordModelSelection?: ProjectRecord["defaultModelSelection"];
-  readonly settings?: Parameters<typeof Settings.layerTest>[0];
+  readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly checkWorktreeBase?: ThreadLaunch.ThreadLaunchService["Service"]["checkWorktreeBase"];
 }) => {
   const projectId = ProjectId.make("project:client-target");
+  // "claudeAgent" is the real default instance id for the Claude driver
+  // (see `defaultInstanceIdForDriver`), so it resolves as enabled by default
+  // under the project-scoped provider instance gate the launch path now runs.
   const modelSelection = {
     instanceId: ProviderInstanceId.make("claudeAgent"),
     model: "claude-opus",
@@ -722,6 +729,7 @@ const clientLaunchHarness = (input: {
     deletedAt: null,
   };
   const layerDependencies = Layer.mergeAll(
+    ServerSettings.layerTest(input.settings),
     NodeCrypto.layer,
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
       environmentId: EnvironmentId.make("environment"),
@@ -772,7 +780,6 @@ const clientLaunchHarness = (input: {
           return project;
         }),
     }),
-    Settings.layerTest(input.settings),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     NodeServices.layer,
   ).pipe(
