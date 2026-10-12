@@ -23,7 +23,12 @@ const contextPattern = (glob: string) =>
     "su",
   );
 
-/** Marks the checks the base branch requires. Without enabled status checks nothing changes. */
+/**
+ * Marks the checks the base branch requires. Without enabled status checks nothing changes.
+ * An exact context with no status yet is added as a pending required check, as Forgejo itself
+ * treats it, so the watch cannot pass before it reports. A glob that matches nothing names no
+ * check to add and is left out.
+ */
 export function markRequiredForgejoChecks(
   checks: ReadonlyArray<PullRequestCheck>,
   branch: typeof ForgejoBranchStatusChecks.Type,
@@ -33,7 +38,13 @@ export function markRequiredForgejoChecks(
     return checks;
   }
   const patterns = contexts.map(contextPattern);
-  return checks.map((check) =>
+  const marked = checks.map((check) =>
     patterns.some((pattern) => pattern.test(check.name)) ? { ...check, required: true } : check,
   );
+  const missing = [...new Set(contexts)].flatMap((name) =>
+    !name.trim() || /[*?]/.test(name) || checks.some((check) => check.name === name)
+      ? []
+      : [{ name, status: "pending", description: null, url: null, required: true } as const],
+  );
+  return [...marked, ...missing];
 }

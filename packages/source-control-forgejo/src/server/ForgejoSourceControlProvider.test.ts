@@ -206,6 +206,18 @@ it.effect.each([
       status_check_contexts: ["ci/required-*"],
     }),
     [true, true, undefined],
+    [],
+  ],
+  [
+    "adds a required context with no status yet as a pending required check",
+    Effect.succeed({
+      name: "release/1.x",
+      protected: true,
+      enable_status_check: true,
+      status_check_contexts: ["ci/required-build", "ci/required-deploy"],
+    }),
+    [true, undefined, undefined],
+    [["ci/required-deploy", "pending", true]],
   ],
   [
     "keeps every Forgejo status gating when the base branch cannot be read",
@@ -218,8 +230,9 @@ it.effect.each([
       }),
     ),
     [undefined, undefined, undefined],
+    [],
   ],
-] as const)("%s", ([, branch, required]) =>
+] as const)("%s", ([, branch, required, added]) =>
   Effect.gen(function* () {
     const provider = yield* ForgejoPullRequestProvider.make;
     const readChecks = provider.getChangeRequestChecks;
@@ -234,6 +247,7 @@ it.effect.each([
           ["ci/required-build", "success", required[0]],
           ["ci/required-test", "success", required[1]],
           ["ci/optional-lint", "failure", required[2]],
+          ...added.map((entry) => [...entry]),
         ],
       );
     }

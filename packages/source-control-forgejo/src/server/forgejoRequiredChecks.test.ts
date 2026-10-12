@@ -47,6 +47,19 @@ describe("markRequiredForgejoChecks", () => {
     );
   });
 
+  it("adds an exact context with no status yet as a pending required check", () => {
+    const contexts = { enable_status_check: true, status_check_contexts: ["build", "test"] };
+    assert.deepStrictEqual(markRequiredForgejoChecks([check("build")], contexts), [
+      { ...check("build"), required: true },
+      { name: "test", status: "pending", description: null, url: null, required: true },
+    ]);
+  });
+
+  it("adds nothing for a glob context that matches no status", () => {
+    const contexts = { enable_status_check: true, status_check_contexts: ["ci/*"] };
+    assert.deepStrictEqual(markRequiredForgejoChecks([check("lint")], contexts), [check("lint")]);
+  });
+
   it("keeps every check gating when a context uses glob syntax it cannot match", () => {
     assert.deepStrictEqual(requiredNames(["build", "test-a"], ["build", "test-[ab]"]), []);
     assert.deepStrictEqual(requiredNames(["build", "test-a"], ["{build,lint}"]), []);

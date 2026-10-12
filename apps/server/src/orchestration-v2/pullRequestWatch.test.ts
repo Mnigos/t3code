@@ -274,6 +274,17 @@ describe("evaluatePullRequestWatch", () => {
     ]);
     assert.isTrue(result.next.passed);
   });
+
+  it("does not report passed while a required check has not reported yet", () => {
+    // Forgejo adds a required context with no status yet as a pending required check.
+    const checks = [
+      { ...check("ci/required-build", "success"), required: true },
+      { ...check("ci/required-test", "pending"), required: true },
+    ];
+    const result = evaluatePullRequestWatch(watch(), detail({ checks }), noRemarks);
+    assert.deepEqual(result.changes, []);
+    assert.isFalse(result.next.passed);
+  });
 });
 
 describe("pullRequestWatchMessage", () => {
