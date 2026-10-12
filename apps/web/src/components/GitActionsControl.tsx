@@ -148,7 +148,6 @@ interface PendingDefaultBranchAction {
   action: DefaultBranchConfirmableAction;
   branchName: string;
   includesCommit: boolean;
-  hasWorkingTreeChanges: boolean;
   commitMessage?: string;
   onConfirmed?: () => void;
   filePaths?: string[];
@@ -1226,8 +1225,14 @@ export default function GitActionsControl({
         terminology: changeRequestTerminology,
       })
     : null;
+  // Follows the live status so the button tracks the tree while the dialog is open. Until the
+  // status loads, keep the option enabled: the server stays the authority and rejects a stale
+  // request with its own error.
   const featureBranchUnavailableReason = pendingDefaultBranchAction
-    ? resolveFeatureBranchUnavailableReason(pendingDefaultBranchAction)
+    ? resolveFeatureBranchUnavailableReason({
+        branchName: pendingDefaultBranchAction.branchName,
+        hasWorkingTreeChanges: gitStatus?.hasWorkingTreeChanges ?? true,
+      })
     : null;
 
   useEffect(() => {
@@ -1306,7 +1311,6 @@ export default function GitActionsControl({
           action,
           branchName: actionBranch,
           includesCommit,
-          hasWorkingTreeChanges: !!actionStatus?.hasWorkingTreeChanges,
           ...(commitMessage ? { commitMessage } : {}),
           ...(onConfirmed ? { onConfirmed } : {}),
           ...(filePaths ? { filePaths } : {}),
