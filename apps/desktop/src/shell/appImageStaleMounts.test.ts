@@ -41,6 +41,15 @@ describe("stripStaleAppImageMounts", () => {
     expect(result).not.toHaveProperty("LD_LIBRARY_PATH");
   });
 
+  it("classifies segments by their normalized path but keeps them verbatim", () => {
+    const result = stripStaleAppImageMounts({
+      APPDIR: CURRENT,
+      PATH: `${CURRENT}/../.mount_old/usr/bin:${CURRENT}/usr/bin:${CURRENT}/usr/../bin`,
+    });
+
+    expect(result.PATH).toBe(`${CURRENT}/usr/bin:${CURRENT}/usr/../bin`);
+  });
+
   it("matches mounts under a non-default TMPDIR", () => {
     const result = stripStaleAppImageMounts({
       APPDIR: "/var/tmp/.mount_cur",

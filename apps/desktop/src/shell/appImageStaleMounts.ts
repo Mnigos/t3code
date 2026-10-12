@@ -1,3 +1,6 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - Pure string normalization of env paths, no filesystem access.
+import * as NodePath from "node:path";
+
 // Search-path variables the AppImage runtime prepends its mount dir to.
 const APPIMAGE_SEARCH_PATH_ENV_KEYS = ["PATH", "LD_LIBRARY_PATH", "XDG_DATA_DIRS"] as const;
 
@@ -13,6 +16,8 @@ const APPIMAGE_MOUNT_ROOT = /^(.*?\/\.mount_[^/]+)(?:\/|$)/;
  * Segments under the current APPDIR stay, as do all non-mount segments,
  * including empty ones (the loader and PATH lookup read them as the current
  * dir). A variable is deleted only when every segment was a stale mount.
+ * Segments are classified by their normalized path, so `..` cannot hop from
+ * the current mount into a stale one, but are kept verbatim.
  * Non-AppImage envs are returned as is.
  *
  * Can fold into the shared `appImageRuntimeEnv` helper once #16679 lands.
@@ -20,7 +25,7 @@ const APPIMAGE_MOUNT_ROOT = /^(.*?\/\.mount_[^/]+)(?:\/|$)/;
 export function stripStaleAppImageMounts(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (env.APPIMAGE === undefined && env.APPDIR === undefined) return env;
 
-  const appDir = env.APPDIR?.replace(/\/+$/, "");
+  const appDir = env.APPDIR && NodePath.posix.normalize(env.APPDIR).replace(/\/+$/, "");
   const scrubbed: NodeJS.ProcessEnv = { ...env };
   for (const key of APPIMAGE_SEARCH_PATH_ENV_KEYS) {
     const value = env[key];
@@ -30,7 +35,7 @@ export function stripStaleAppImageMounts(env: NodeJS.ProcessEnv): NodeJS.Process
     const separator = key === "LD_LIBRARY_PATH" ? /[:;]/ : ":";
     const segments = value.split(separator);
     const kept = segments.filter((segment) => {
-      const mountRoot = APPIMAGE_MOUNT_ROOT.exec(segment)?.[1];
+      const mountRoot = APPIMAGE_MOUNT_ROOT.exec(NodePath.posix.normalize(segment))?.[1];
       return mountRoot === undefined || mountRoot === appDir;
     });
     if (kept.length === segments.length) continue;
