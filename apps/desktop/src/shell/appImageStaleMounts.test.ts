@@ -62,6 +62,28 @@ describe("stripStaleAppImageMounts", () => {
     expect(result).not.toHaveProperty("LD_LIBRARY_PATH");
   });
 
+  it("keeps a variable whose only survivors are empty segments", () => {
+    const result = stripStaleAppImageMounts({
+      APPDIR: CURRENT,
+      PATH: ":/tmp/.mount_old/usr/bin",
+      XDG_DATA_DIRS: "/tmp/.mount_old/usr/share:/tmp/.mount_older/usr/share",
+    });
+
+    expect(result.PATH).toBe(":");
+    expect(result).not.toHaveProperty("XDG_DATA_DIRS");
+  });
+
+  it("splits LD_LIBRARY_PATH on semicolons too, but not PATH", () => {
+    const result = stripStaleAppImageMounts({
+      APPDIR: CURRENT,
+      LD_LIBRARY_PATH: "/usr/lib;/tmp/.mount_old/usr/lib:/opt/lib;/tmp/.mount_older/usr/lib",
+      PATH: "/usr/bin;/opt/bin:/usr/local/bin",
+    });
+
+    expect(result.LD_LIBRARY_PATH).toBe("/usr/lib:/opt/lib");
+    expect(result.PATH).toBe("/usr/bin;/opt/bin:/usr/local/bin");
+  });
+
   it("leaves a non-AppImage env untouched", () => {
     const env = {
       PATH: "/tmp/.mount_abc/usr/bin:/usr/bin",

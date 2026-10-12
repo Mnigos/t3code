@@ -10,7 +10,9 @@ const APPIMAGE_MOUNT_ROOT = /^(.*?\/\.mount_[^/]+)(?:\/|$)/;
  * `.mount_*` dir. Launching T3 Code from a terminal or agent that inherited an
  * earlier launch's env stacks every older mount onto PATH; once one of them is
  * unmounted, every spawn that walks PATH (git, shells) fails with ENOTCONN.
- * Segments under the current APPDIR stay, as do all non-mount segments.
+ * Segments under the current APPDIR stay, as do all non-mount segments,
+ * including empty ones (the loader and PATH lookup read them as the current
+ * dir). A variable is deleted only when every segment was a stale mount.
  * Non-AppImage envs are returned as is.
  *
  * Can fold into the shared `appImageRuntimeEnv` helper once #16679 lands.
@@ -23,14 +25,21 @@ export function stripStaleAppImageMounts(env: NodeJS.ProcessEnv): NodeJS.Process
   for (const key of APPIMAGE_SEARCH_PATH_ENV_KEYS) {
     const value = env[key];
     if (value === undefined) continue;
-    const kept = value.split(":").filter((segment) => {
+    // glibc's loader also splits LD_LIBRARY_PATH on `;`; its separators are
+    // normalised to `:` on rejoin. PATH and XDG_DATA_DIRS stay colon-only.
+    const separator = key === "LD_LIBRARY_PATH" ? /[:;]/ : ":";
+    const segments = value.split(separator);
+    const kept = segments.filter((segment) => {
       const mountRoot = APPIMAGE_MOUNT_ROOT.exec(segment)?.[1];
       return mountRoot === undefined || mountRoot === appDir;
     });
-    if (kept.some((segment) => segment.length > 0)) {
-      scrubbed[key] = kept.join(":");
-    } else if (value.length > 0) {
+    if (kept.length === segments.length) continue;
+    if (kept.length === 0) {
       delete scrubbed[key];
+    } else {
+      // Lone empty survivors join to "", which the loader ignores; ":" keeps
+      // their current-dir entry.
+      scrubbed[key] = kept.join(":") || ":";
     }
   }
   return scrubbed;
