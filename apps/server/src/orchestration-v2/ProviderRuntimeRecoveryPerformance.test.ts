@@ -23,15 +23,15 @@ import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 
@@ -40,14 +40,14 @@ import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 // `it.live` keeps a real clock: each reconcile gets a fresh command id, so the
 // second recover cannot hide behind command receipt dedup.
 
-const stores = Layer.mergeAll(
+const layerStores = Layer.mergeAll(
   EventStore.layer,
   ProjectionStore.layer,
   EffectOutbox.layer,
   IdAllocator.layer,
-).pipe(Layer.provideMerge(SqlitePersistenceMemory));
-const TestLayer = ProviderRuntimeRecovery.layer.pipe(
-  Layer.provideMerge(EventSink.layer.pipe(Layer.provideMerge(stores))),
+).pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
+const layerTest = ProviderRuntimeRecovery.layer.pipe(
+  Layer.provideMerge(EventSink.layer.pipe(Layer.provideMerge(layerStores))),
   Layer.provideMerge(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true })),
 );
 
@@ -459,8 +459,8 @@ const measureCrash = Effect.fn(function* (scenario: Scenario) {
 });
 
 const measure = Effect.fn(function* (scenario: Scenario) {
-  const graceful = yield* measureGraceful(scenario).pipe(Effect.provide(Layer.fresh(TestLayer)));
-  const crash = yield* measureCrash(scenario).pipe(Effect.provide(Layer.fresh(TestLayer)));
+  const graceful = yield* measureGraceful(scenario).pipe(Effect.provide(Layer.fresh(layerTest)));
+  const crash = yield* measureCrash(scenario).pipe(Effect.provide(Layer.fresh(layerTest)));
   return { ...scenario, ...graceful, ...crash } satisfies Measurement;
 });
 
@@ -522,7 +522,7 @@ it.live("startup recovery continues every running thread on a shared provider se
     assert.equal(summary.terminalizedRuns, active, "terminalized active runs");
     assert.equal(summary.stoppedSessions, 1, "the shared session stops once");
     assert.equal(yield* continuationEffectCount, active, "recorded continuations");
-  }).pipe(Effect.provide(Layer.fresh(TestLayer))),
+  }).pipe(Effect.provide(Layer.fresh(layerTest))),
 );
 
 it.live("startup recovery does not continue threads whose shared session was already stopped", () =>
@@ -533,7 +533,7 @@ it.live("startup recovery does not continue threads whose shared session was alr
     assert.equal(summary.terminalizedRuns, 3, "terminalized active runs");
     assert.equal(summary.stoppedSessions, 0, "no live session to stop");
     assert.equal(yield* continuationEffectCount, 0, "recorded continuations");
-  }).pipe(Effect.provide(Layer.fresh(TestLayer))),
+  }).pipe(Effect.provide(Layer.fresh(layerTest))),
 );
 
 it.live.skipIf(process.env.T3_BENCH_RECOVERY !== "1")(
