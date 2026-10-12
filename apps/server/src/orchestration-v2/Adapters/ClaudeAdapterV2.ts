@@ -2931,6 +2931,9 @@ interface ActiveClaudeTurnContext {
   // Error text of this turn's failed tool calls, by tool_use id: the only
   // record of why Claude Code denied a call on its own.
   readonly toolErrorTexts: Map<string, string>;
+  // Tool calls T3's permission callback denied in this turn, so its result's
+  // permission_denials can tell them from Claude Code's own denials.
+  readonly deniedByT3ToolUseIds: Set<string>;
   readonly ignoredTaskIds: Set<string>;
   readonly announcedUsageLimits: Set<string>;
   authenticationFailureMessage: string | undefined;
@@ -3677,9 +3680,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // tool_use frame is handled, in whichever run that frame is routed
         // to (the prompt's turn, or the continuation that drains a wake).
         const heldProposedPlansByToolUseId = new Map<string, string>();
-        // Tool calls T3's permission callback denied, so a result's
-        // permission_denials can tell them from Claude Code's own denials.
-        const deniedByT3ToolUseIds = new Set<string>();
+        // T3 denials whose tool_use frame is held for a prompt echo, like
+        // held plans: each joins the turn its frame is routed to.
+        const heldDeniedByT3ToolUseIds = new Set<string>();
         const runtimeContext = yield* Effect.context<never>();
         const runPromise = Effect.runPromiseWith(runtimeContext);
 
@@ -7295,6 +7298,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   toolName: toolUse.name.replace(/^mcp__claude_ai_/u, "mcp__"),
                 }),
             });
+            if (heldDeniedByT3ToolUseIds.delete(toolUse.id)) {
+              context.deniedByT3ToolUseIds.add(toolUse.id);
+            }
             const heldPlan = heldProposedPlansByToolUseId.get(toolUse.id);
             if (heldPlan !== undefined) {
               heldProposedPlansByToolUseId.delete(toolUse.id);
@@ -7629,15 +7635,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? null
               : claudePermissionDenialNotice({
                   denials: message.permission_denials ?? [],
-                  deniedByT3: deniedByT3ToolUseIds,
+                  deniedByT3: context.deniedByT3ToolUseIds,
                   toolErrorTexts: context.toolErrorTexts,
                   permissionMode: claudeRuntimeQueryPolicyForRuntimePolicy(
                     context.input.runtimePolicy,
                   ).permissionMode,
                 });
-            for (const denial of message.permission_denials ?? []) {
-              deniedByT3ToolUseIds.delete(denial.tool_use_id);
-            }
             if (denialNotice !== null) {
               // The turn still completes. The notice keeps the thread out of
               // auto-settlement until another run starts.
@@ -8142,9 +8145,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           runPromise(
             canUseToolEffect(toolName, toolInput, callbackOptions).pipe(
               Effect.tap((result) =>
-                Effect.sync(() => {
-                  if (result.behavior === "deny") {
-                    deniedByT3ToolUseIds.add(callbackOptions.toolUseID);
+                Effect.gen(function* () {
+                  const context = yield* Ref.get(activeTurn);
+                  // With no active turn, no result will list this call.
+                  if (result.behavior !== "deny" || context === null) return;
+                  if (heldToolUseIds(context).has(callbackOptions.toolUseID)) {
+                    heldDeniedByT3ToolUseIds.add(callbackOptions.toolUseID);
+                  } else {
+                    context.deniedByT3ToolUseIds.add(callbackOptions.toolUseID);
                   }
                 }),
               ),
@@ -8549,6 +8557,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               },
               toolCalls: new Map(),
               toolErrorTexts: new Map(),
+              deniedByT3ToolUseIds: new Set(),
               ignoredTaskIds: new Set(),
               announcedUsageLimits: new Set(),
               authenticationFailureMessage: undefined,

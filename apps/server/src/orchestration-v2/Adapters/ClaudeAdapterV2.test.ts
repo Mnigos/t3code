@@ -5708,7 +5708,24 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             "The client captured your proposed plan",
           );
           yield* Queue.offer(harness.sdkMessages, planToolResult);
-          yield* Queue.offer(harness.sdkMessages, wakeResult);
+          // The wake result lists the captured plan among its denials. T3 made
+          // that denial while the frame was held, so the turn it lands in
+          // must still recognize it.
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000000745",
+              result: WAKE_RESULT_TEXT,
+              origin: { kind: "task-notification" },
+              permissionDenials: [
+                {
+                  tool_name: "ExitPlanMode",
+                  tool_use_id: planToolUseId,
+                  tool_input: { plan: planMarkdown },
+                },
+              ],
+            }),
+          );
           yield* awaitUntil(
             () => harness.continuationRequests.length === 1,
             "continuation request",
@@ -5796,6 +5813,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.deepEqual(
             userRunItems.map((item) => item.type),
             ["assistant_message"],
+          );
+          assert.notInclude(
+            [...latestItems.values()].map((item) => item.type),
+            "system_notice",
           );
         }).pipe(
           Effect.provide(
