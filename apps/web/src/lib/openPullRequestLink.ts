@@ -1,13 +1,11 @@
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, PullRequestRef, ScopedThreadRef } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
-import { type MouseEvent, useCallback } from "react";
+import { type MouseEvent, useCallback, useMemo } from "react";
 
-import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { parseChangeRequestUrl, type ChangeRequestLink } from "@t3tools/shared/changeRequestUrl";
-import {
-  canonicalRepositoryKey,
-  sourceControlRepositorySelector,
-} from "@t3tools/shared/sourceControl";
+import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 
 import { useOpenLink } from "../browser/useOpenLink";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
@@ -15,6 +13,7 @@ import { useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import { useProjects, useServerConfigs } from "../state/entities";
+import { serverEnvironment } from "../state/server";
 import { usePrimaryEnvironmentId } from "../state/environments";
 
 export {
@@ -27,13 +26,6 @@ export {
 } from "@t3tools/shared/changeRequestUrl";
 
 /**
- * Returns a click handler that opens a pull request URL in the system browser.
- *
- * Stops event propagation/default so activating the link does not also trigger
- * an enclosing row or trigger (e.g. opening the branch dropdown), and surfaces a
- * toast when the local API is unavailable or the open fails.
- */
-/**
  * The project a link belongs to, or nothing. Matched the way the server matches: the repository
  * identity is the full path below the host where one was recorded — which is what nested GitLab
  * groups and Azure project paths need — and the host is the first segment of the canonical
@@ -45,24 +37,56 @@ export function findProjectForChangeRequest(
 ): EnvironmentProject | undefined {
   return projects.find((project) => {
     const identity = project.repositoryIdentity;
-    if (!identity) return false;
-    const kind = identity.provider as SourceControlProviderKind | undefined;
-    if (kind === undefined) return false;
-    if (kind === "azure-devops") {
-      return (
-        canonicalRepositoryKey(identity.canonicalKey.toLowerCase()) ===
-        canonicalRepositoryKey(`${link.host}/${link.repository}`.toLowerCase())
-      );
-    }
-    const repository =
-      identity.displayName ??
-      (identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null);
     return (
-      repository !== null &&
-      repository.toLowerCase() === link.repository.toLowerCase() &&
-      pullRequestHostOf(identity, kind) === link.host.toLowerCase()
+      identity?.provider !== undefined &&
+      sourceControlClients.get(identity.provider).isChangeRequestInRepository(identity, link)
     );
   });
+}
+
+export function resolvePullRequestPreviewTarget({
+  environmentId,
+  projects,
+  pullRequestsEnabled,
+  url,
+}: {
+  environmentId: EnvironmentId | null;
+  projects: ReadonlyArray<EnvironmentProject>;
+  pullRequestsEnabled: boolean;
+  url: string;
+}): { environmentId: EnvironmentId; input: PullRequestRef } | null {
+  if (!pullRequestsEnabled || environmentId === null) return null;
+  const parsed = parseChangeRequestUrl(url);
+  if (parsed === null) return null;
+  const project = findProjectForChangeRequest(
+    projects.filter((candidate) => candidate.environmentId === environmentId),
+    parsed,
+  );
+  if (project === undefined) return null;
+  return {
+    environmentId,
+    input: {
+      projectId: project.id,
+      host: parsed.authority ?? parsed.host,
+      repository: sourceControlRepositorySelector(project.repositoryIdentity) ?? parsed.repository,
+      number: parsed.number,
+    },
+  };
+}
+
+export function usePullRequestPreviewTarget(environmentId: EnvironmentId | null, url: string) {
+  const projects = useProjects();
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  return useMemo(
+    () =>
+      resolvePullRequestPreviewTarget({
+        environmentId,
+        projects,
+        pullRequestsEnabled: serverConfig?.environment.capabilities.pullRequests === true,
+        url,
+      }),
+    [environmentId, projects, serverConfig, url],
+  );
 }
 
 /**
@@ -76,21 +100,11 @@ export function findProjectOnChangeRequestHost(
 ): EnvironmentProject | undefined {
   const own = findProjectForChangeRequest(projects, link);
   if (own !== undefined) return own;
-  // Azure CLI reads use the checkout's organization and project, not host-wide credentials.
-  if (
-    canonicalRepositoryKey(`${link.host}/${link.repository}`.toLowerCase()).startsWith(
-      "dev.azure.com/",
-    )
-  )
-    return undefined;
   return projects.find((project) => {
     const identity = project.repositoryIdentity;
-    const kind = identity?.provider as SourceControlProviderKind | undefined;
     return (
-      identity != null &&
-      kind !== undefined &&
-      kind !== "azure-devops" &&
-      pullRequestHostOf(identity, kind) === link.host.toLowerCase()
+      identity?.provider !== undefined &&
+      sourceControlClients.get(identity.provider).canReadChangeRequestOnHost(identity, link)
     );
   });
 }
@@ -188,7 +202,7 @@ export function useOpenChangeRequestLink(
           projectId: project.id,
           ...(serverConfigs.get(project.environmentId)?.environment.capabilities
             .threadPullRequests === true
-            ? { host: parsed.host }
+            ? { host: parsed.authority ?? parsed.host }
             : {}),
           repository,
           url: targetUrl,
@@ -203,7 +217,7 @@ export function useOpenChangeRequestLink(
               state: previous.state ?? "all",
               repository,
               number: parsed.number,
-              selectedHost: parsed.host,
+              selectedHost: parsed.authority ?? parsed.host,
               selectedProjectId: project.id,
               selectedEnvironmentId: project.environmentId,
             }),
@@ -221,7 +235,7 @@ export function useOpenChangeRequestLink(
           state: "all",
           repository,
           number: parsed.number,
-          selectedHost: parsed.host,
+          selectedHost: parsed.authority ?? parsed.host,
           selectedProjectId: project.id,
           // Named so the page opens the right one of two servers holding this project.
           selectedEnvironmentId: project.environmentId,

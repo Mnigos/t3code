@@ -2,12 +2,14 @@ import { useIsFocused } from "@react-navigation/native";
 import { useEvent } from "expo";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { ActivityIndicator, AppState, Pressable, View } from "react-native";
+import { AppState, Pressable, View } from "react-native";
 
+import { AppActivityIndicator } from "./AppActivityIndicator";
 import { AppText } from "./AppText";
 import { SymbolView } from "./AppSymbol";
 import { VideoThumbnailImage } from "./VideoThumbnailImage";
-import { useMediaActions, type MediaActionsSource } from "../lib/mediaActions";
+import { useMediaActions } from "../state/mediaActions";
+import { type MediaActionsSource } from "../lib/mediaActionsSource";
 import { MediaActionsMenu } from "./MediaActionsMenu";
 
 /** Loads only after Play or opening the viewer. Source replacement never starts playback itself. */
@@ -19,6 +21,7 @@ function LoadedMediaVideo(props: {
 }) {
   const focused = useIsFocused();
   const active = useRef(focused && AppState.currentState === "active");
+  const fullscreen = useRef(false);
   const [attempt, setAttempt] = useState(0);
   // Expo's Android player also reports completed playback as idle.
   const [loadState, setLoadState] = useState<"pending" | "complete" | "error">("pending");
@@ -38,10 +41,12 @@ function LoadedMediaVideo(props: {
 
   useEffect(() => {
     active.current = focused && !props.paused && AppState.currentState === "active";
-    if (!active.current) player.pause();
+    if (!focused || props.paused || (!active.current && !fullscreen.current)) player.pause();
+    // Native background handling distinguishes Android's fullscreen activity
+    // from leaving the app; React Native reports both as background.
     const subscription = AppState.addEventListener("change", (state) => {
       active.current = focused && !props.paused && state === "active";
-      if (!active.current) player.pause();
+      if (state === "inactive" || (state === "background" && !fullscreen.current)) player.pause();
     });
     return () => subscription.remove();
   }, [focused, player, props.paused]);
@@ -70,6 +75,12 @@ function LoadedMediaVideo(props: {
         nativeControls
         contentFit="contain"
         fullscreenOptions={{ enable: true }}
+        onFullscreenEnter={() => {
+          fullscreen.current = true;
+        }}
+        onFullscreenExit={() => {
+          fullscreen.current = false;
+        }}
         allowsPictureInPicture={false}
       />
       {loadState === "error" || (loadState === "complete" && status === "error") ? (
@@ -86,7 +97,7 @@ function LoadedMediaVideo(props: {
         </View>
       ) : loadState === "pending" || status === "loading" ? (
         <View pointerEvents="none" className="absolute inset-0 items-center justify-center">
-          <ActivityIndicator color="#ffffff" accessibilityLabel="Loading video" />
+          <AppActivityIndicator color="#ffffff" accessibilityLabel="Loading video" />
         </View>
       ) : null}
     </View>
@@ -150,7 +161,7 @@ function MediaVideoPlayerContent(props: MediaVideoPlayerProps) {
             {props.unavailable ? (
               <AppText className="text-sm text-white/80">Video unavailable</AppText>
             ) : props.uri === null ? (
-              <ActivityIndicator color="#ffffff" accessibilityLabel="Loading video" />
+              <AppActivityIndicator color="#ffffff" accessibilityLabel="Loading video" />
             ) : (
               <View className="size-12 items-center justify-center rounded-full bg-black/60">
                 <SymbolView name="play" size={28} tintColor="#ffffff" type="monochrome" />

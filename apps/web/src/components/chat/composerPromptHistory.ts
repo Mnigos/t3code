@@ -1,6 +1,7 @@
-import { extractTrailingElementContexts } from "../../lib/elementContext";
-import { extractTrailingPreviewAnnotation } from "../../lib/previewAnnotation";
-import { extractTrailingTerminalContexts } from "../../lib/terminalContext";
+import {
+  ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+  collectComposerContextReferences,
+} from "@t3tools/shared/composerContextReferences";
 import { PLAN_IMPLEMENTATION_PROMPT_PREFIX } from "../../proposedPlan";
 
 /**
@@ -14,10 +15,8 @@ import { PLAN_IMPLEMENTATION_PROMPT_PREFIX } from "../../proposedPlan";
 
 const CLAUDE_ULTRATHINK_PREFIX = "Ultrathink:\n";
 const REVIEW_COMMENT_BLOCK_PATTERN = /<review_comment\b[^>]*>[\s\S]*?<\/review_comment>/g;
-
-/** Text sent in place of an empty prompt when a message is attachments only. */
-export const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]";
+const TRAILING_LEGACY_CONTEXT =
+  /\n*<(terminal_context|element_context|preview_annotation)>\n([\s\S]*?)\n<\/\1>\s*$/;
 
 export interface ComposerPromptHistoryMessage {
   readonly id: string;
@@ -96,7 +95,7 @@ function stripInlineTerminalLabels(prompt: string, headers: ReadonlyArray<string
     const label = `@${match[1]!.trim().toLowerCase().replace(/\s+/g, "-")}:${match[2]}`;
     // Whole label only: `@terminal-1:4` must not match inside `@terminal-1:40`
     // or `@terminal-1:4-12`.
-    const labelPattern = new RegExp(`${escapeRegExp(label)}(?![\\d-])`);
+    const labelPattern = new RegExp(`(?<![\\w@.-])${escapeRegExp(label)}(?![\\d-])`);
     const index = result.search(labelPattern);
     if (index < 0) continue;
     let end = index + label.length;
@@ -126,25 +125,29 @@ export function recallableComposerPrompt(messageText: string): string {
       prompt = withoutReviewComments;
       continue;
     }
-    const previewAnnotation = extractTrailingPreviewAnnotation(prompt);
-    if (previewAnnotation.annotation) {
-      prompt = previewAnnotation.promptText;
-      continue;
-    }
-    const elementContexts = extractTrailingElementContexts(prompt);
-    if (elementContexts.contextCount > 0) {
-      prompt = elementContexts.promptText;
-      continue;
-    }
-    const terminalContexts = extractTrailingTerminalContexts(prompt);
-    if (terminalContexts.contextCount > 0) {
-      prompt = stripInlineTerminalLabels(
-        terminalContexts.promptText,
-        terminalContexts.contexts.map((context) => context.header),
-      );
+    const legacy = TRAILING_LEGACY_CONTEXT.exec(prompt);
+    if (legacy) {
+      if (
+        legacy[1] === "preview_annotation" &&
+        /^<preview_annotation>\s*$/m.test(legacy[2]!) &&
+        !/^(?:Id|Page|Comment|Targets): /m.test(legacy[2]!)
+      )
+        break;
+      const headers = Array.from(legacy[2]!.matchAll(/^- (.+):$/gm), (match) => match[1]!);
+      if (legacy[1] !== "preview_annotation" && headers.length === 0) break;
+      prompt = prompt.slice(0, legacy.index).trimEnd();
+      if (legacy[1] === "terminal_context") prompt = stripInlineTerminalLabels(prompt, headers);
       continue;
     }
     break;
+  }
+
+  // Recall is text-only: never create dangling chips without their backing records.
+  for (const reference of collectComposerContextReferences(prompt).toReversed()) {
+    let { start, end } = reference;
+    if (prompt[end] === " ") end += 1;
+    else if (prompt[start - 1] === " ") start -= 1;
+    prompt = prompt.slice(0, start) + prompt.slice(end);
   }
 
   // App-composed sends are not text the user typed, so they are not history.

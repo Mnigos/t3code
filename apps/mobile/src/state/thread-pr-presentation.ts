@@ -4,7 +4,7 @@ import type {
   ThreadPullRequestLink,
   VcsStatusResult,
 } from "@t3tools/contracts";
-import { resolveChangeRequestPresentation } from "@t3tools/shared/sourceControl";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 
 import {
   resolveThreadCurrentPullRequestLink,
@@ -17,11 +17,12 @@ export interface ThreadPrPresentation {
   readonly number: number;
   readonly state: ThreadPr["state"] | null;
   readonly kind: "pull-request" | "stack";
+  readonly others: number;
   readonly isDraft: boolean;
   /** Provider-side last activity, bounding when a terminal state landed. */
   readonly updatedAt: string | null;
   readonly url: string;
-  /** Compact pull request number label, e.g. "3774". */
+  /** Compact pull request number or linked count, e.g. "3774" or "+2". */
   readonly label: string;
   /** Full, provider-aware label for assistive technologies. */
   readonly accessibilityLabel: string;
@@ -38,17 +39,18 @@ export function presentThreadPr(
   pr: ThreadPr,
   provider: VcsStatusResult["sourceControlProvider"] | null | undefined,
 ): ThreadPrPresentation {
-  const presentation = resolveChangeRequestPresentation(provider);
+  const { changeRequest } = sourceControlClients.get(provider?.kind);
   const isDraft = pr.state === "open" && pr.isDraft === true;
   return {
     kind: "pull-request",
+    others: 0,
     number: pr.number,
     state: pr.state,
     isDraft,
     updatedAt: pr.updatedAt ?? null,
     url: pr.url,
     label: String(pr.number),
-    accessibilityLabel: `#${pr.number} ${presentation.longName} ${isDraft ? "draft" : pr.state}`,
+    accessibilityLabel: `#${pr.number} ${changeRequest.singular} ${isDraft ? "draft" : pr.state}`,
     textClassName: isDraft ? "text-foreground-muted" : PR_STATE_TEXT_CLASS[pr.state],
   };
 }
@@ -61,14 +63,25 @@ export function presentThreadLinkedPullRequests(
   const badge = resolveThreadPullRequestBadge(links);
   if (link === null || badge === null) return null;
   const snapshot = link.snapshot;
-  const state = badge.kind === "stack" ? badge.state : (snapshot?.state ?? null);
-  const isDraft = snapshot?.isDraft === true && state === "open";
+  const linkedCount = badge.kind === "pull-request" && badge.others > 0 ? badge.others + 1 : null;
+  const isMultiple = badge.kind === "stack" || linkedCount !== null;
+  const state = isMultiple
+    ? badge.state === "draft"
+      ? "open"
+      : badge.state
+    : (snapshot?.state ?? null);
+  const isDraft = isMultiple
+    ? badge.state === "draft"
+    : snapshot?.isDraft === true && state === "open";
   const label =
     badge.kind === "stack"
       ? String(badge.layers)
-      : `${link.number}${badge.others > 0 ? ` +${badge.others}` : ""}`;
+      : linkedCount !== null
+        ? `+${linkedCount}`
+        : String(link.number);
   return {
     kind: badge.kind,
+    others: badge.kind === "pull-request" ? badge.others : 0,
     number: link.number,
     state,
     isDraft,
@@ -77,9 +90,16 @@ export function presentThreadLinkedPullRequests(
     label,
     accessibilityLabel:
       badge.kind === "stack"
-        ? `${badge.layers} pull requests in stack, ${state ?? "status pending"}`
-        : `#${link.number} pull request ${state === null ? "status pending" : isDraft ? "draft" : state}${badge.others > 0 ? `, ${badge.others} more linked` : ""}`,
-    textClassName: state === null || isDraft ? "text-foreground-muted" : PR_STATE_TEXT_CLASS[state],
+        ? `${badge.layers} pull requests in stack, ${isDraft ? "draft" : (state ?? "status pending")}`
+        : linkedCount !== null
+          ? `${linkedCount} linked pull requests, overall ${badge.state}`
+          : `#${link.number} pull request ${state === null ? "status pending" : isDraft ? "draft" : state}`,
+    textClassName:
+      state === null || isDraft
+        ? "text-foreground-muted"
+        : isMultiple && state === "closed"
+          ? "text-adaptive-rose-600-400"
+          : PR_STATE_TEXT_CLASS[state],
   };
 }
 
