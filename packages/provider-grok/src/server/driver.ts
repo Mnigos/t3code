@@ -31,6 +31,7 @@ import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIden
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { discoverGrokSkills } from "./skills.ts";
 import {
+  homebrewOwnershipFromCommandPath,
   makeCachedProviderMaintenanceResolution,
   makeManualOnlyProviderMaintenanceCapabilities,
   makeProviderMaintenanceCapabilities,
@@ -63,10 +64,15 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
         packageName: GROK_NPM_PACKAGE,
       });
     }
-    const homebrew = yield* resolveHomebrewProviderMaintenance(
-      { provider: DRIVER_KIND, packageName: GROK_NPM_PACKAGE },
-      context,
-    );
+    // Grok ships through Homebrew only as a cask; a formula keg such as `node`
+    // holding an npm global is not Grok's owner.
+    const homebrew =
+      homebrewOwnershipFromCommandPath(context.realCommandPath)?.kind === "cask"
+        ? yield* resolveHomebrewProviderMaintenance(
+            { provider: DRIVER_KIND, packageName: GROK_NPM_PACKAGE },
+            context,
+          )
+        : null;
     return (
       homebrew ??
       makeProviderMaintenanceCapabilities({
