@@ -263,6 +263,17 @@ describe("evaluatePullRequestWatch", () => {
     assert.isFalse(pushed.exhausted);
     assert.equal(pushed.next.wakes, 1);
   });
+
+  it("reports passed when the required checks pass and an optional one failed", () => {
+    const optional = check("ci/optional-lint", "failure");
+    const checks = [{ ...check("ci/required-test", "success"), required: true }, optional];
+    const result = evaluatePullRequestWatch(watch(), detail({ checks }), noRemarks);
+    assert.deepEqual(result.changes, [
+      { kind: "checks-failed", failed: [optional] },
+      { kind: "checks-passed", count: 1, required: true },
+    ]);
+    assert.isTrue(result.next.passed);
+  });
 });
 
 describe("pullRequestWatchMessage", () => {
