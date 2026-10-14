@@ -3,6 +3,7 @@ import { vi } from "vite-plus/test";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -12,6 +13,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as RelayClient from "@t3tools/shared/relayClient";
 
@@ -33,12 +35,17 @@ const layerRelayClientAvailable = Layer.succeed(
   }),
 );
 
+// Only connectors that log a metrics address are polled for readiness.
+const unusedHttpClient = HttpClient.make(() => Effect.die("unused"));
+
 const runtimeDependencies = (
   spawner: ReturnType<typeof ChildProcessSpawner.make>,
   relayClientLayer = layerRelayClientAvailable,
+  httpClient = unusedHttpClient,
 ) =>
   Layer.mergeAll(
     Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    Layer.succeed(HttpClient.HttpClient, httpClient),
     relayClientLayer,
     Layer.mock(ServerSecretStore.ServerSecretStore)({
       get: () => Effect.succeedNone,
@@ -48,11 +55,12 @@ const runtimeDependencies = (
 const buildCloudManagedEndpointRuntime = (
   spawner: ReturnType<typeof ChildProcessSpawner.make>,
   relayClientLayer = layerRelayClientAvailable,
+  httpClient = unusedHttpClient,
 ) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
       ManagedEndpointRuntime.layer.pipe(
-        Layer.provide(runtimeDependencies(spawner, relayClientLayer)),
+        Layer.provide(runtimeDependencies(spawner, relayClientLayer, httpClient)),
       ),
     );
     return yield* Effect.service(ManagedEndpointRuntime.CloudManagedEndpointRuntime).pipe(
@@ -410,6 +418,97 @@ describe("CloudManagedEndpointRuntime", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
+  it.effect(
+    "restarts a running connector whose readiness check keeps reporting no connections",
+    () =>
+      Effect.gen(function* () {
+        const spawned: Array<number> = [];
+        const killed: Array<number> = [];
+        const exits: Array<Deferred.Deferred<ChildProcessSpawner.ExitCode>> = [];
+        const secondSpawned = yield* Deferred.make<void>();
+        const spawner = ChildProcessSpawner.make(() =>
+          Effect.gen(function* () {
+            const index = spawned.length;
+            const pid = 1000 + index;
+            const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+            spawned.push(pid);
+            exits.push(exit);
+            if (index === 1) yield* Deferred.succeed(secondSpawned, undefined);
+            const handle = makeHandle({
+              pid,
+              exitCode: Deferred.await(exit),
+              onKill: () => {
+                if (!killed.includes(pid)) killed.push(pid);
+                Deferred.doneUnsafe(exit, Exit.succeed(ChildProcessSpawner.ExitCode(143)));
+              },
+              output: Stream.concat(
+                Stream.make(
+                  new TextEncoder().encode(
+                    `2026-10-14T08:49:04Z INF Starting metrics server on 127.0.0.1:${40000 + index}/metrics\n`,
+                  ),
+                ),
+                Stream.never,
+              ),
+            });
+            yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
+            return handle;
+          }),
+        );
+        // Each readiness check takes the next scripted answer, then 503. It
+        // records which connectors were killed before it was sent.
+        const answers: Array<number | "refused"> = [];
+        const checks = yield* Queue.unbounded<{ readonly url: string; readonly killed: string }>();
+        const httpClient = HttpClient.make((request) => {
+          Queue.offerUnsafe(checks, { url: request.url, killed: killed.join(",") });
+          const status = answers.shift() ?? 503;
+          return status === "refused"
+            ? Effect.fail(
+                new HttpClientError.HttpClientError({
+                  reason: new HttpClientError.TransportError({ request }),
+                }),
+              )
+            : Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status })));
+        });
+        // Advances the test clock until the watchdog checks readiness again.
+        const nextCheck = Effect.gen(function* () {
+          for (let second = 0; second < 60; second += 1) {
+            yield* TestClock.adjust(Duration.seconds(1));
+            const check = yield* Queue.poll(checks);
+            if (Option.isSome(check)) return check.value;
+          }
+          return yield* Effect.die("No readiness check within a minute");
+        });
+        const runtime = yield* buildCloudManagedEndpointRuntime(
+          spawner,
+          layerRelayClientAvailable,
+          httpClient,
+        );
+        yield* runtime.applyConfig({
+          providerKind: "cloudflare_tunnel",
+          connectorToken: "token",
+          tunnelId: "tunnel-1",
+        });
+
+        // Five 503s, a failed request that does not count, a ready answer that
+        // clears the streak, then six 503s in a row.
+        answers.push(503, 503, 503, 503, 503, "refused", 200);
+        for (let check = 0; check < 13; check += 1) {
+          expect(yield* nextCheck).toEqual({ url: "http://127.0.0.1:40000/ready", killed: "" });
+        }
+        yield* Deferred.await(secondSpawned);
+        expect(killed).toEqual([1000]);
+        expect(spawned).toEqual([1000, 1001]);
+
+        // The replacement follows a restart that never got a ready answer, so
+        // it is killed only after twelve 503s.
+        for (let check = 0; check < 12; check += 1) {
+          expect(yield* nextCheck).toEqual({ url: "http://127.0.0.1:40001/ready", killed: "1000" });
+        }
+        yield* Deferred.await(exits[1]!);
+        expect(killed).toEqual([1000, 1001]);
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("starts, deduplicates, rotates, and stops the Cloudflare connector", () =>
     Effect.gen(function* () {
       const spawned: Array<ChildProcess.StandardCommand> = [];
@@ -457,8 +556,28 @@ describe("CloudManagedEndpointRuntime", () => {
 
       expect(spawned.map((command) => command.command)).toEqual(["cloudflared", "cloudflared"]);
       expect(spawned.map((command) => command.args)).toEqual([
-        ["tunnel", "--no-autoupdate", "--loglevel", "info", "--output", "default", "run"],
-        ["tunnel", "--no-autoupdate", "--loglevel", "info", "--output", "default", "run"],
+        [
+          "tunnel",
+          "--no-autoupdate",
+          "--loglevel",
+          "info",
+          "--output",
+          "default",
+          "--metrics",
+          "127.0.0.1:0",
+          "run",
+        ],
+        [
+          "tunnel",
+          "--no-autoupdate",
+          "--loglevel",
+          "info",
+          "--output",
+          "default",
+          "--metrics",
+          "127.0.0.1:0",
+          "run",
+        ],
       ]);
       expect(spawned.map((command) => command.options.env?.TUNNEL_TOKEN)).toEqual([
         "token-1",
@@ -851,7 +970,7 @@ describe("CloudManagedEndpointRuntime", () => {
   );
 
   it.effect(
-    "runs an older relay client while the pinned one installs, then restarts on it and prunes",
+    "runs an older relay client while the pinned one installs, then hands off to it and prunes",
     () =>
       Effect.gen(function* () {
         const olderClient = {
@@ -870,7 +989,7 @@ describe("CloudManagedEndpointRuntime", () => {
         const releaseInstall = yield* Deferred.make<void>();
         const pruned = yield* Deferred.make<void>();
         const spawned = yield* Queue.unbounded<string>();
-        const killed: Array<string> = [];
+        const olderStopped = yield* Deferred.make<void>();
         const output = yield* Queue.unbounded<Uint8Array>();
         const spawner = ChildProcessSpawner.make((command) =>
           Effect.gen(function* () {
@@ -878,7 +997,11 @@ describe("CloudManagedEndpointRuntime", () => {
             yield* Queue.offer(spawned, executable);
             const handle = makeHandle({
               pid: executable === pinnedClient.executablePath ? 2 : 1,
-              onKill: () => killed.push(executable),
+              onKill: () => {
+                if (executable === olderClient.executablePath) {
+                  Deferred.doneUnsafe(olderStopped, Effect.void);
+                }
+              },
               ...(executable === pinnedClient.executablePath
                 ? { output: Stream.fromQueue(output) }
                 : {}),
@@ -916,7 +1039,8 @@ describe("CloudManagedEndpointRuntime", () => {
 
         yield* Deferred.succeed(releaseInstall, undefined);
         expect(yield* Queue.take(spawned)).toBe(pinnedClient.executablePath);
-        expect(killed).toEqual([olderClient.executablePath]);
+        // The older connector keeps serving until the pinned one registers.
+        expect(Option.isNone(yield* Deferred.poll(olderStopped))).toBe(true);
 
         yield* Queue.offer(
           output,
@@ -924,6 +1048,7 @@ describe("CloudManagedEndpointRuntime", () => {
             "2026-10-08T00:00:00Z INF Registered tunnel connection connIndex=0\n",
           ),
         );
+        yield* Deferred.await(olderStopped);
         yield* Deferred.await(pruned);
       }),
   );
@@ -1118,7 +1243,7 @@ describe("CloudManagedEndpointRuntime", () => {
     }),
   );
 
-  it.effect("requests recovery when the updated relay client fails to start", () =>
+  it.effect("keeps the older connector when the updated relay client fails to start", () =>
     Effect.gen(function* () {
       const olderClient = {
         status: "available",
@@ -1133,18 +1258,26 @@ describe("CloudManagedEndpointRuntime", () => {
         version: RelayClient.CLOUDFLARED_VERSION,
       } as const;
       let installed = false;
+      let olderKilled = false;
       const releaseInstall = yield* Deferred.make<void>();
+      const pinnedAttempted = yield* Deferred.make<void>();
       const spawner = ChildProcessSpawner.make((command) =>
         Effect.gen(function* () {
           const executable = ChildProcess.isStandardCommand(command) ? command.command : "";
           if (executable === pinnedClient.executablePath) {
+            yield* Deferred.succeed(pinnedAttempted, undefined);
             return yield* PlatformError.systemError({
               _tag: "PermissionDenied",
               module: "ChildProcess",
               method: "spawn",
             });
           }
-          const handle = makeHandle({ pid: 6, onKill: () => {} });
+          const handle = makeHandle({
+            pid: 6,
+            onKill: () => {
+              olderKilled = true;
+            },
+          });
           yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
           return handle;
         }),
@@ -1170,6 +1303,68 @@ describe("CloudManagedEndpointRuntime", () => {
       );
       const config = { providerKind: "cloudflare_tunnel", connectorToken: "token" } as const;
       expect(yield* runtime.applyConfig(config)).toMatchObject({ status: "running", pid: 6 });
+
+      yield* Deferred.succeed(releaseInstall, undefined);
+      yield* Deferred.await(pinnedAttempted);
+      // The failed swap leaves the older connector active and running.
+      expect(yield* runtime.applyConfig(config)).toMatchObject({ status: "running", pid: 6 });
+      expect(olderKilled).toBe(false);
+    }),
+  );
+
+  it.effect("requests recovery when the older connector exited during a failed swap", () =>
+    Effect.gen(function* () {
+      const olderClient = {
+        status: "available",
+        executablePath: "/managed/2025.9.0/cloudflared",
+        source: "managed",
+        version: "2025.9.0",
+      } as const;
+      const pinnedClient = {
+        status: "available",
+        executablePath: "/managed/pinned/cloudflared",
+        source: "managed",
+        version: RelayClient.CLOUDFLARED_VERSION,
+      } as const;
+      let installed = false;
+      const releaseInstall = yield* Deferred.make<void>();
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          const executable = ChildProcess.isStandardCommand(command) ? command.command : "";
+          if (executable === pinnedClient.executablePath) {
+            return yield* PlatformError.systemError({
+              _tag: "PermissionDenied",
+              module: "ChildProcess",
+              method: "spawn",
+            });
+          }
+          // The older connector has exited by the time the swap fails.
+          const handle = makeHandle({ pid: 12, onKill: () => {}, isRunning: () => !installed });
+          yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
+          return handle;
+        }),
+      );
+      const runtime = yield* buildCloudManagedEndpointRuntime(
+        spawner,
+        Layer.succeed(
+          RelayClient.RelayClient,
+          RelayClient.RelayClient.of({
+            resolve: Effect.sync(() => (installed ? pinnedClient : olderClient)),
+            install: Deferred.await(releaseInstall).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  installed = true;
+                  return pinnedClient;
+                }),
+              ),
+            ),
+            installWithProgress: () => Effect.die("unused"),
+            pruneManagedVersions: Effect.void,
+          }),
+        ),
+      );
+      const config = { providerKind: "cloudflare_tunnel", connectorToken: "token" } as const;
+      expect(yield* runtime.applyConfig(config)).toMatchObject({ status: "running", pid: 12 });
 
       yield* Deferred.succeed(releaseInstall, undefined);
       expect(Option.getOrThrow(yield* Stream.runHead(runtime.recoveryRequests))).toEqual(config);
