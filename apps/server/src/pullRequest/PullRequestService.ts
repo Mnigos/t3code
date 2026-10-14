@@ -1266,6 +1266,17 @@ export const make = Effect.gen(function* () {
   const isAgreementKey = (key: string) => key.indexOf("\n") !== key.lastIndexOf("\n");
   /** Each listed project's repository, so a turn can withdraw that repository's agreements. */
   const repositoryOfProject = new Map<ProjectId, string>();
+  /**
+   * Withdraws one repository's empty agreements. An agent turn or a successful action may have
+   * opened or reopened a pull request a search cannot see, so that repository is read on its own
+   * again rather than trusting an earlier empty answer. Other repositories keep theirs: turns end
+   * constantly, and clearing every agreement would undo the savings.
+   */
+  const withdrawAgreements = (visibility: string) => {
+    for (const key of searchVisibleAt.keys()) {
+      if (key.startsWith(`${visibility}\n`)) searchVisibleAt.delete(key);
+    }
+  };
 
   const listUncached: PullRequestService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
@@ -3535,15 +3546,8 @@ export const make = Effect.gen(function* () {
         }
       }
       projectEpochs.set(projectId, listingsEpoch);
-      // The turn may have opened a pull request a search cannot see, so its repository is read
-      // on its own again rather than trusting an earlier empty answer. Other repositories keep
-      // theirs: turns end constantly, and clearing every agreement would undo the savings.
       const visibility = repositoryOfProject.get(projectId);
-      if (visibility !== undefined) {
-        for (const key of searchVisibleAt.keys()) {
-          if (key.startsWith(`${visibility}\n`)) searchVisibleAt.delete(key);
-        }
-      }
+      if (visibility !== undefined) withdrawAgreements(visibility);
       return readCache
         .invalidate(`project:${projectId}`)
         .pipe(Effect.andThen(SubscriptionRef.set(pullRequestRefreshes, listingsEpoch)));
@@ -3578,6 +3582,7 @@ export const make = Effect.gen(function* () {
       Effect.ensuring(readCache.invalidate(refScope(ref))),
     );
     bumpRefEpoch({ ...ref, repository });
+    withdrawAgreements(searchVisibilityKey(ref.host, repository));
     listingsEpoch = ++epochCounter;
     yield* SubscriptionRef.set(pullRequestRefreshes, listingsEpoch);
     if (input.action === "merge") {

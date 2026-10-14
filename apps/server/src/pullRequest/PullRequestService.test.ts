@@ -4762,6 +4762,47 @@ it.effect("asks only the turned repository again after an agent turn", () =>
     assert.deepStrictEqual(separately.slice(3), ["acme/docs"]);
   }),
 );
+it.effect("asks only the acted-on repository again after a pull request action", () =>
+  Effect.gen(function* () {
+    const separately: Array<string> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+        project({ id: "p3", title: "wiki", workspaceRoot: "/c", repository: "acme/wiki" }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequestsAcross: () =>
+            Effect.succeed({
+              items: [batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z")],
+              truncated: false,
+            }),
+          listChangeRequests: ({ repository }) =>
+            Effect.sync(() => {
+              separately.push(repository);
+              return { items: [], truncated: false, continues: false };
+            }),
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    assert.deepStrictEqual(separately.toSorted(), ["acme/docs", "acme/wiki"]);
+
+    // Reopening a pull request the search cannot see must not leave it hidden behind the
+    // agreement; the wiki was not touched.
+    yield* service.runAction({
+      projectId: "p2" as ProjectId,
+      repository: "acme/docs",
+      number: 7,
+      action: "reopen",
+    });
+    yield* TestClock.adjust("31 seconds");
+    yield* service.list({ state: "open" });
+    assert.deepStrictEqual(separately.slice(2), ["acme/docs"]);
+  }),
+);
 it.effect("reads the repositories one at a time when the search itself fails", () =>
   Effect.gen(function* () {
     const separately: string[] = [];
