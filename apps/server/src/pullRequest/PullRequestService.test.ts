@@ -4575,6 +4575,37 @@ it.effect(
       assert.deepStrictEqual(searched, ["all", "all", "authored", "all"]);
     }),
 );
+it.effect("keeps reading a repository on its own when its empty read stopped short", () =>
+  Effect.gen(function* () {
+    const separately: Array<string> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequestsAcross: () =>
+            Effect.succeed({
+              items: [batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z")],
+              truncated: false,
+            }),
+          // A bounded scan that ran out before finding a match: empty, but not conclusive.
+          listChangeRequests: ({ repository }) =>
+            Effect.sync(() => {
+              separately.push(repository);
+              return { items: [], truncated: true, continues: false };
+            }),
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    yield* TestClock.adjust("31 seconds");
+    yield* service.list({ state: "open" });
+    assert.deepStrictEqual(separately, ["acme/docs", "acme/docs"]);
+  }),
+);
 it.effect("asks an empty repository again once a different account is listing", () =>
   Effect.gen(function* () {
     let account = "bilal";

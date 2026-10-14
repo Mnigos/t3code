@@ -1527,6 +1527,8 @@ export const make = Effect.gen(function* () {
                   // the repository: one GitHub cannot search is silent to every question, and an
                   // empty answer to this one says nothing about the rows another would find. The
                   // viewer is part of the question, since "what I authored" differs per account.
+                  // An empty read that stopped at its scan bound proves nothing, so it agrees with
+                  // nobody.
                   const agreedKey = `${searchVisibilityKey(project.host, project.repository)}\n${question}`;
                   const agreedAt = searchVisibleAt.get(agreedKey);
                   const agreedEmpty =
@@ -1544,6 +1546,7 @@ export const make = Effect.gen(function* () {
                           if (
                             batch.entries.length === 0 &&
                             batch.errors.length === 0 &&
+                            !batch.truncated &&
                             batch.nextCursor === null
                           ) {
                             searchVisibleAt.set(agreedKey, now);
