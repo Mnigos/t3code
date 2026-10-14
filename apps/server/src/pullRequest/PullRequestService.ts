@@ -863,6 +863,8 @@ export const make = Effect.gen(function* () {
             refinedProvider?.kind === "forgejo"
               ? new URL(refinedProvider.baseUrl).host.toLowerCase()
               : pullRequestHostOf(identity, kind);
+          // Before the de-duplication below, so a turn in any worktree finds its repository.
+          repositoryOfProject.set(project.id, searchVisibilityKey(host, repository));
           if (filter.host !== undefined && host !== filter.host.toLowerCase()) {
             continue;
           }
@@ -1262,6 +1264,8 @@ export const make = Effect.gen(function* () {
     `${host}\n${repository.trim().toLowerCase()}`;
   /** An agreement key carries the question after the host and repository. */
   const isAgreementKey = (key: string) => key.indexOf("\n") !== key.lastIndexOf("\n");
+  /** Each listed project's repository, so a turn can withdraw that repository's agreements. */
+  const repositoryOfProject = new Map<ProjectId, string>();
 
   const listUncached: PullRequestService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
@@ -3531,6 +3535,15 @@ export const make = Effect.gen(function* () {
         }
       }
       projectEpochs.set(projectId, listingsEpoch);
+      // The turn may have opened a pull request a search cannot see, so its repository is read
+      // on its own again rather than trusting an earlier empty answer. Other repositories keep
+      // theirs: turns end constantly, and clearing every agreement would undo the savings.
+      const visibility = repositoryOfProject.get(projectId);
+      if (visibility !== undefined) {
+        for (const key of searchVisibleAt.keys()) {
+          if (key.startsWith(`${visibility}\n`)) searchVisibleAt.delete(key);
+        }
+      }
       return readCache
         .invalidate(`project:${projectId}`)
         .pipe(Effect.andThen(SubscriptionRef.set(pullRequestRefreshes, listingsEpoch)));

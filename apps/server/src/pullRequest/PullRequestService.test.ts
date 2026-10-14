@@ -4721,6 +4721,47 @@ it.effect("asks an empty-agreed repository again after a refresh", () =>
     assert.deepStrictEqual(separately, ["acme/docs", "acme/docs"]);
   }),
 );
+it.effect("asks only the turned repository again after an agent turn", () =>
+  Effect.gen(function* () {
+    const separately: Array<string> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+        project({ id: "p3", title: "wiki", workspaceRoot: "/c", repository: "acme/wiki" }),
+        // A second worktree of docs, which the listing folds into p2.
+        project({ id: "p4", title: "docs fix", workspaceRoot: "/d", repository: "acme/docs" }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequestsAcross: () =>
+            Effect.succeed({
+              items: [batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z")],
+              truncated: false,
+            }),
+          listChangeRequests: ({ repository }) =>
+            Effect.sync(() => {
+              separately.push(repository);
+              return { items: [], truncated: false, continues: false };
+            }),
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    assert.deepStrictEqual(separately.toSorted(), ["acme/docs", "acme/wiki"]);
+
+    // The turn may have opened a pull request the search cannot see; the wiki was not touched.
+    yield* service.refreshAfterTurn("p2" as ProjectId);
+    yield* service.list({ state: "open" });
+    assert.deepStrictEqual(separately.slice(2), ["acme/docs"]);
+
+    // A turn in the other worktree is a turn in the same repository.
+    yield* service.refreshAfterTurn("p4" as ProjectId);
+    yield* service.list({ state: "open" });
+    assert.deepStrictEqual(separately.slice(3), ["acme/docs"]);
+  }),
+);
 it.effect("reads the repositories one at a time when the search itself fails", () =>
   Effect.gen(function* () {
     const separately: string[] = [];
