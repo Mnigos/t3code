@@ -1580,12 +1580,9 @@ export const OrchestrationV2TurnItem = Schema.Union([
     type: Schema.Literal("system_notice"),
     message: Schema.String,
     /**
-     * The notice reports something the agent could not get past without the
-     * user, such as tool calls Claude blocked without asking. While its run is
-     * the thread's latest started run, the thread is held out of
-     * auto-settlement. Queued runs (held or not) and runs cancelled before
-     * starting keep the hold; any run that starts, including an automatic
-     * continuation, releases it.
+     * Something the agent could not get past without the user, such as tool
+     * calls Claude blocked without asking. Holds the thread out of
+     * auto-settlement until another run starts.
      */
     needsAttention: Schema.optional(Schema.Boolean),
   }),

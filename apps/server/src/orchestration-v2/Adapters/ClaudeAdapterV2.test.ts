@@ -2373,10 +2373,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* Queue.unbounded<
           Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn_item.updated" }>
         >();
-      const runtimeRequestReceipts =
-        yield* Queue.unbounded<
-          Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "runtime_request.updated" }>
-        >();
       let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
       const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
         instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
@@ -2478,9 +2474,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             if (event.type === "turn_item.updated" && event.turnItem.type === "system_notice") {
               yield* Queue.offer(systemNoticeReceipts, event);
             }
-            if (event.type === "runtime_request.updated") {
-              yield* Queue.offer(runtimeRequestReceipts, event);
-            }
           }),
         ),
         Effect.forkScoped,
@@ -2517,7 +2510,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         terminalReceipts,
         subagentReceipts,
         systemNoticeReceipts,
-        runtimeRequestReceipts,
         getOpenedOptions: () => openedOptions,
         terminalEvents,
         hasPendingBackgroundWork,
@@ -4267,68 +4259,48 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
-  describe("permission denials Claude Code made on its own", () => {
-    const AUTO_RUNTIME_POLICY = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-      runtimeMode: "auto",
-      interactionMode: "default",
-      cwd: "/workspace",
-    });
-    const APPROVAL_RUNTIME_POLICY = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-      runtimeMode: "approval-required",
-      interactionMode: "default",
-      cwd: "/workspace",
-    });
-    const CLASSIFIER_REASON =
-      "Permission for this action has been denied. Reason: cannot assess the action due to earlier conversation content.";
-
-    const makeDenialHarness = Effect.gen(function* () {
+  it.effect("flags the denials Claude Code made on its own, leaving out T3's, once per turn", () =>
+    Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
+      const reason =
+        "Permission for this action has been denied. Reason: cannot assess the action due to earlier conversation content.";
       let sequence = 900;
-      let turn = 0;
-      const nextUuid = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
+      const uuid = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
       const startTurn = Effect.fnUntraced(function* (
-        runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+        ordinal: number,
+        runtimeMode: "auto" | "approval-required",
       ) {
-        turn++;
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
             threadId: harness.threadId,
             providerThread: harness.providerThread,
             now: yield* DateTime.now,
-            attemptId: RunAttemptId.make(`attempt-claude-denials-${turn}`),
-            providerTurnOrdinal: turn,
+            attemptId: RunAttemptId.make(`attempt-claude-denials-${ordinal}`),
+            providerTurnOrdinal: ordinal,
             text: "Run the checks.",
             attachments: [],
-            runtimePolicy,
+            runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode,
+              interactionMode: "default",
+              cwd: "/workspace",
+            }),
           }),
         );
       });
-      // A tool call Claude made and the failed tool_result it got back.
-      const failedToolCall = Effect.fnUntraced(function* (input: {
-        readonly toolUseId: string;
-        readonly toolName: string;
-        readonly error: string;
-      }) {
+      // A Bash call Claude made and the failed tool_result it got back.
+      const deniedBash = Effect.fnUntraced(function* (toolUseId: string, error: string) {
         yield* harness.offerAndWait(
           claudeSdkFrame({
             type: "assistant",
             message: {
-              id: `msg_${nextUuid()}`,
+              id: `msg_${toolUseId}`,
               model: "claude-sonnet-4-6",
               type: "message",
               role: "assistant",
-              content: [{ type: "tool_use", id: input.toolUseId, name: input.toolName, input: {} }],
-              stop_reason: "tool_use",
-              stop_sequence: null,
-              usage: {
-                input_tokens: 1,
-                output_tokens: 1,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-              },
+              content: [{ type: "tool_use", id: toolUseId, name: "Bash", input: {} }],
             },
             parent_tool_use_id: null,
-            uuid: nextUuid(),
+            uuid: uuid(),
             session_id: WAKE_NATIVE_SESSION,
           }),
         );
@@ -4338,39 +4310,30 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             message: {
               role: "user",
               content: [
-                {
-                  type: "tool_result",
-                  tool_use_id: input.toolUseId,
-                  content: input.error,
-                  is_error: true,
-                },
+                { type: "tool_result", tool_use_id: toolUseId, content: error, is_error: true },
               ],
             },
             parent_tool_use_id: null,
-            uuid: nextUuid(),
+            uuid: uuid(),
             session_id: WAKE_NATIVE_SESSION,
           }),
         );
       });
-      const finishTurn = Effect.fnUntraced(function* (
-        denials: SDKResultMessage["permission_denials"],
-      ) {
+      const finishTurn = Effect.fnUntraced(function* (denials: ReadonlyArray<[string, string]>) {
         yield* harness.offerAndWait(
           makeResultFrame({
-            uuid: nextUuid(),
+            uuid: uuid(),
             result: "I could not run the checks.",
-            permissionDenials: denials,
+            permissionDenials: denials.map(([tool_name, tool_use_id]) => ({
+              tool_name,
+              tool_use_id,
+              tool_input: {},
+            })),
           }),
         );
         return yield* Queue.take(harness.terminalReceipts);
       });
-      const notices = () =>
-        harness.events.flatMap((event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
-            ? [event.turnItem]
-            : [],
-        );
-      const canUseTool = (
+      const t3Decision = (
         toolName: string,
         toolInput: Record<string, unknown>,
         toolUseID: string,
@@ -4383,117 +4346,61 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             requestId: `request-${toolUseID}`,
           }),
         );
-      return { harness, startTurn, failedToolCall, finishTurn, notices, canUseTool };
-    });
 
-    it.effect(
-      "flags classifier denials with their reason, and only on the turn that had them",
-      () =>
-        Effect.gen(function* () {
-          const { startTurn, failedToolCall, finishTurn, notices } = yield* makeDenialHarness;
-          yield* startTurn(AUTO_RUNTIME_POLICY);
-          for (const toolUseId of ["toolu-classifier-1", "toolu-classifier-2"]) {
-            yield* failedToolCall({ toolUseId, toolName: "Bash", error: CLASSIFIER_REASON });
-          }
-          const terminal = yield* finishTurn([
-            { tool_name: "Bash", tool_use_id: "toolu-classifier-1", tool_input: { command: "ls" } },
-            {
-              tool_name: "Bash",
-              tool_use_id: "toolu-classifier-2",
-              tool_input: { command: "pwd" },
-            },
-          ]);
+      // Auto mode: T3 captures a plan and denies a cancelled question, then
+      // the classifier blocks two Bash calls.
+      yield* startTurn(1, "auto");
+      assert.equal(
+        (yield* t3Decision("ExitPlanMode", { plan: "# Plan" }, "toolu-plan"))?.behavior,
+        "deny",
+      );
+      const cancelled = new AbortController();
+      cancelled.abort();
+      const question = yield* t3Decision(
+        "AskUserQuestion",
+        { questions: [] },
+        "toolu-question",
+        cancelled.signal,
+      );
+      assert.equal(question?.behavior, "deny");
+      yield* deniedBash("toolu-classifier-1", reason);
+      yield* deniedBash("toolu-classifier-2", reason);
+      const first = yield* finishTurn([
+        ["ExitPlanMode", "toolu-plan"],
+        ["AskUserQuestion", "toolu-question"],
+        ["Bash", "toolu-classifier-1"],
+        ["Bash", "toolu-classifier-2"],
+      ]);
+      // Outside Auto mode, a deny rule. Turn 1's denials do not carry over.
+      yield* startTurn(2, "approval-required");
+      yield* deniedBash("toolu-rule", "Denied by rule.");
+      const second = yield* finishTurn([["Bash", "toolu-rule"]]);
 
-          assert.equal(terminal.status, "completed");
-          const [notice, ...rest] = notices();
-          assert.lengthOf(rest, 0);
-          assert.equal(notice?.type, "system_notice");
-          if (notice?.type !== "system_notice") return;
-          assert.equal(notice.message, `Auto mode denied 2 actions (Bash): ${CLASSIFIER_REASON}`);
-          assert.isTrue(notice.needsAttention);
-          assert.equal(notice.providerTurnId, terminal.providerTurnId);
-
-          // The next turn has no denials, so it adds nothing.
-          yield* startTurn(AUTO_RUNTIME_POLICY);
-          assert.equal((yield* finishTurn([])).status, "completed");
-          assert.lengthOf(notices(), 1);
-        }).pipe(
-          Effect.scoped,
-          Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-          ),
+      assert.deepEqual([first.status, second.status], ["completed", "completed"]);
+      assert.deepEqual(
+        harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
+            ? [
+                [
+                  event.turnItem.providerTurnId,
+                  event.turnItem.message,
+                  event.turnItem.needsAttention,
+                ],
+              ]
+            : [],
         ),
-    );
-
-    it.effect("leaves out the calls T3 denied itself", () =>
-      Effect.gen(function* () {
-        const { harness, startTurn, failedToolCall, finishTurn, notices, canUseTool } =
-          yield* makeDenialHarness;
-        yield* startTurn(APPROVAL_RUNTIME_POLICY);
-
-        // ExitPlanMode: T3 captures the plan and denies the tool.
-        assert.equal(
-          (yield* canUseTool("ExitPlanMode", { plan: "# Plan" }, "toolu-plan"))?.behavior,
-          "deny",
-        );
-        // A question the CLI cancelled before the user answered.
-        const cancelled = new AbortController();
-        cancelled.abort();
-        assert.equal(
-          (yield* canUseTool(
-            "AskUserQuestion",
-            { questions: [] },
-            "toolu-question",
-            cancelled.signal,
-          ))?.behavior,
-          "deny",
-        );
-        // An approval the user declined.
-        const decline = yield* canUseTool("Write", { file_path: "/tmp/x" }, "toolu-write").pipe(
-          Effect.forkScoped,
-        );
-        // The cancelled question raised a request first; skip to the Write one.
-        let approval = yield* Queue.take(harness.runtimeRequestReceipts);
-        while (approval.runtimeRequest.nativeRequestRef?.nativeId !== "toolu-write") {
-          approval = yield* Queue.take(harness.runtimeRequestReceipts);
-        }
-        yield* harness.runtime.respondToRuntimeRequest({
-          requestId: approval.runtimeRequest.id,
-          decision: "decline",
-        });
-        assert.equal((yield* Fiber.join(decline))?.behavior, "deny");
-        yield* failedToolCall({
-          toolUseId: "toolu-write",
-          toolName: "Write",
-          error: "User declined tool execution.",
-        });
-
-        // A deny rule Claude Code applied on its own, in the same turn.
-        yield* failedToolCall({
-          toolUseId: "toolu-rule",
-          toolName: "Bash",
-          error: "Denied by rule.",
-        });
-
-        const terminal = yield* finishTurn([
-          { tool_name: "ExitPlanMode", tool_use_id: "toolu-plan", tool_input: {} },
-          { tool_name: "AskUserQuestion", tool_use_id: "toolu-question", tool_input: {} },
-          { tool_name: "Write", tool_use_id: "toolu-write", tool_input: {} },
-          { tool_name: "Bash", tool_use_id: "toolu-rule", tool_input: {} },
-        ]);
-        assert.equal(terminal.status, "completed");
-        assert.deepEqual(
-          notices().map((notice) => (notice.type === "system_notice" ? notice.message : null)),
-          ["Claude denied 1 action (Bash): Denied by rule."],
-        );
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
+        [
+          [first.providerTurnId, `Auto mode denied 2 actions (Bash): ${reason}`, true],
+          [second.providerTurnId, "Claude denied 1 action (Bash): Denied by rule.", true],
+        ],
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
       ),
-    );
-  });
+    ),
+  );
 
   it.effect("removes deleted tasks without resurrecting them on later updates or turns", () =>
     Effect.gen(function* () {
@@ -5789,21 +5696,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             "The client captured your proposed plan",
           );
           yield* Queue.offer(harness.sdkMessages, planToolResult);
-          // The wake result lists the captured plan among its denials. T3 made
-          // that denial while the frame was held, so the turn it lands in
-          // must still recognize it.
+          // The wake result lists the plan T3 captured while its frame was held.
           yield* Queue.offer(
             harness.sdkMessages,
-            makeResultFrame({
-              uuid: "00000000-0000-4000-8000-000000000745",
-              result: WAKE_RESULT_TEXT,
-              origin: { kind: "task-notification" },
-              permissionDenials: [
-                {
-                  tool_name: "ExitPlanMode",
-                  tool_use_id: planToolUseId,
-                  tool_input: { plan: planMarkdown },
-                },
+            claudeSdkFrame({
+              ...wakeResult,
+              permission_denials: [
+                { tool_name: "ExitPlanMode", tool_use_id: planToolUseId, tool_input: {} },
               ],
             }),
           );
