@@ -133,6 +133,25 @@ function isUnsettled(thread: ProjectionStore.ProjectionThreadPullRequests): bool
 }
 
 /**
+ * Links a subagent holds only because, before #14918, new subagents copied their parent's links.
+ * Copies keep the parent's `linkedAt`, so they predate the thread, and on such a thread every stack
+ * link or tombstone was swept in from a copy. Links the thread added after creation stay; the
+ * sweep re-adds their stack siblings the next time it reads their stack.
+ */
+function inheritedLinks(
+  thread: ProjectionStore.ProjectionThreadPullRequests,
+): ReadonlyArray<ThreadPullRequestLink> {
+  const createdAtMs = DateTime.toEpochMillis(thread.createdAt);
+  const isCopy = (link: ThreadPullRequestLink) => Date.parse(link.linkedAt) < createdAtMs;
+  const links = thread.pullRequests ?? [];
+  return thread.lineage.relationshipToParent === "subagent" && links.some(isCopy)
+    ? links.filter(
+        (link) => isCopy(link) || link.source === "stack" || link.source === "stack-dismissed",
+      )
+    : [];
+}
+
+/**
  * Keeps every thread ↔ pull request link's host snapshot current. One sweep a minute reads
  * only the active threads that have links, groups visible links by pull request so the host
  * is asked once per PR no matter how many threads share it, and writes back only what
@@ -189,9 +208,34 @@ export const make = Effect.gen(function* () {
     <E>(cause: Cause.Cause<E>): Effect.Effect<void, E> =>
       Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.logWarning(message, fields);
 
+  /** Removes a thread's inherited links, which no sweep syncs, even when the removal fails. */
+  const withoutInheritedLinks = (thread: ProjectionStore.ProjectionThreadPullRequests) => {
+    const inherited = inheritedLinks(thread);
+    if (inherited.length === 0) return Effect.succeed(thread);
+    return crypto.randomUUIDv4.pipe(
+      Effect.flatMap((uuid) =>
+        engine.dispatch({
+          type: "thread.pull-request.links.remove",
+          commandId: CommandId.make(`server:pr-inherited-remove:${thread.id}:${uuid}`),
+          threadId: thread.id,
+          keys: inherited.map((link) => normalizeThreadPullRequestKey(link)),
+        }),
+      ),
+      Effect.catchCause(logSkipped("inherited pull request links kept", { threadId: thread.id })),
+      Effect.as({
+        ...thread,
+        pullRequests: (thread.pullRequests ?? []).filter((link) => !inherited.includes(link)),
+      }),
+    );
+  };
+
   /** `requested` reads only keys asked for through `requestSync`; `all` is the periodic pass. */
   const sweep = Effect.fn("PullRequestSyncReactor.sweep")(function* (scope: "all" | "requested") {
-    const threads = yield* projections.getThreadsWithPullRequests();
+    // Every sweep checks, so no sweep syncs an inherited link. Archived threads are not read and
+    // do not sync, so they keep theirs.
+    const threads = yield* projections
+      .getThreadsWithPullRequests()
+      .pipe(Effect.flatMap((rows) => Effect.forEach(rows, withoutInheritedLinks)));
     const now = yield* DateTime.now;
     const nowMs = DateTime.toEpochMillis(now);
     const nowIso = DateTime.formatIso(now);

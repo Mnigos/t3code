@@ -2,6 +2,7 @@ import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
+  ThreadPullRequestKey,
 } from "@t3tools/contracts";
 import {
   latestExecutedRun,
@@ -452,6 +453,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.metadata.update":
     case "thread.pull-request.link":
     case "thread.pull-request.unlink":
+    case "thread.pull-request.links.remove":
     case "thread.pull-request-link.sync":
     case "thread.pull-request.watch":
     case "thread.pull-request-watch.sync":
@@ -2424,6 +2426,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.metadata.update"
           | "thread.pull-request.link"
           | "thread.pull-request.unlink"
+          | "thread.pull-request.links.remove"
           | "thread.pull-request-link.sync"
           | "thread.pull-request.watch"
           | "thread.pull-request-watch.sync"
@@ -3119,6 +3122,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: command.type === "thread.pull-request-link.sync" ? thread.updatedAt : now,
           };
         }
+        case "thread.pull-request.links.remove": {
+          const removed = (key: ThreadPullRequestKey) =>
+            command.keys.some((removedKey) => threadPullRequestKeysEqual(key, removedKey));
+          const linked = thread.linkedPullRequest;
+          return {
+            ...thread,
+            pullRequests: threadPullRequestsOf(thread).filter((link) => !removed(link)),
+            linkedPullRequest:
+              linked && removed(legacyThreadPullRequestKey(linked)) ? null : linked,
+          };
+        }
         case "thread.pull-request.watch":
         case "thread.pull-request-watch.sync": {
           const key = normalizeThreadPullRequestKey(command);
@@ -3262,6 +3276,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
+        case "thread.pull-request.links.remove":
         case "thread.pull-request-link.sync":
         case "thread.pull-request.watch":
         case "thread.pull-request-watch.sync":
@@ -10748,6 +10763,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.metadata.update":
       case "thread.pull-request.link":
       case "thread.pull-request.unlink":
+      case "thread.pull-request.links.remove":
       case "thread.pull-request-link.sync":
       case "thread.pull-request.watch":
       case "thread.pull-request.sync":

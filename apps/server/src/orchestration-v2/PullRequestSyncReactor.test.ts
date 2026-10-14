@@ -11,6 +11,7 @@ import {
   TurnItemId,
   type OrchestrationV2Command as OrchestrationCommand,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2Run,
   type OrchestrationProjectShell,
   type PullRequestRef,
@@ -49,6 +50,10 @@ type SyncCommand = Extract<
   { readonly type: "thread.pull-request-link.sync" }
 >;
 type LinkCommand = Extract<OrchestrationCommand, { readonly type: "thread.pull-request.link" }>;
+type RemoveCommand = Extract<
+  OrchestrationV2ServerCommand,
+  { readonly type: "thread.pull-request.links.remove" }
+>;
 
 const testCrypto = Crypto.make({
   randomBytes: (size) => new Uint8Array(size).fill(1),
@@ -181,6 +186,7 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
   const shellSnapshotReads = yield* Ref.make(0);
   const syncCommands = yield* Ref.make<ReadonlyArray<SyncCommand>>([]);
   const linkCommands = yield* Ref.make<ReadonlyArray<LinkCommand>>([]);
+  const removeCommands = yield* Ref.make<ReadonlyArray<RemoveCommand>>([]);
   const summaryCalls = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
   const stackCalls = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
   const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
@@ -214,6 +220,23 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
         Effect.as({ sequence: 1, storedEvents: [] }),
       );
     }
+    if (command.type === "thread.pull-request.links.remove") {
+      const kept = (link: ThreadPullRequestLink) =>
+        !command.keys.some((key) => key.number === link.number);
+      return Ref.update(removeCommands, (recorded) => [...recorded, command]).pipe(
+        Effect.andThen(
+          Ref.update(snapshots, (snapshot) => ({
+            ...snapshot,
+            threads: snapshot.threads.map((thread) =>
+              thread.id === command.threadId
+                ? { ...thread, pullRequests: thread.pullRequests.filter(kept) }
+                : thread,
+            ),
+          })),
+        ),
+        Effect.as({ sequence: 1, storedEvents: [] }),
+      );
+    }
     return Effect.die(new Error(`Unexpected command: ${command.type}`));
   };
 
@@ -243,11 +266,12 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
               .map((thread) => ({
                 id: thread.id,
                 projectId: thread.projectId,
-                lineage: {
+                lineage: thread.lineage ?? {
                   parentThreadId: null,
                   relationshipToParent: null,
                   rootThreadId: thread.id,
                 },
+                createdAt: DateTime.makeUnsafe(thread.createdAt),
                 settledOverride: thread.settledOverride,
                 settledAt: thread.settledAt === null ? null : DateTime.makeUnsafe(thread.settledAt),
                 pullRequests: thread.pullRequests,
@@ -274,6 +298,7 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
     shellSnapshotReads,
     syncCommands,
     linkCommands,
+    removeCommands,
     summaryCalls,
     stackCalls,
     domainEvents,
@@ -1166,3 +1191,62 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 });
+
+it.effect("removes the links a pre-fix subagent inherited before any sweep syncs them", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lineage = {
+        parentThreadId: ThreadId.make("parent"),
+        relationshipToParent: "subagent" as const,
+        rootThreadId: ThreadId.make("parent"),
+      };
+      // Links default to 2026-08-10: older than this child, so copied from its parent.
+      const child = makeThread("pre-fix-child", {
+        createdAt: "2026-08-15T00:00:00.000Z",
+        lineage,
+        pullRequests: [
+          makeLink(6, null, { source: "agent" }),
+          makeLink(7, null, { source: "stack" }),
+          makeLink(8, null, { source: "stack", linkedAt: NOW }),
+          makeLink(9, null, { source: "stack-dismissed", linkedAt: NOW }),
+          makeLink(11, null, { source: "agent", linkedAt: NOW }),
+        ],
+      });
+      // No link predates either thread or the parent is not a subagent, so both keep theirs.
+      const fresh = makeThread("fresh-child", {
+        lineage,
+        pullRequests: [makeLink(12, null, { source: "stack" })],
+      });
+      const parent = makeThread("parent", {
+        createdAt: "2026-08-15T00:00:00.000Z",
+        pullRequests: [makeLink(13)],
+      });
+      const fixture = yield* makeHarness({ snapshot: makeSnapshot([child, fresh, parent]) });
+      yield* Effect.gen(function* () {
+        const reactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+        // A refresh requested before the first periodic sweep must not sync a copy either.
+        yield* reactor.requestSync(makeLink(6));
+        yield* reactor.drain;
+        yield* Queue.take(fixture.snapshotReads);
+        yield* sweepAgain(fixture, yield* startAndSweep(fixture));
+
+        const removed = yield* Ref.get(fixture.removeCommands);
+        assert.deepEqual(
+          removed.map((command) => [command.threadId, command.keys.map((key) => key.number)]),
+          [[child.id, [6, 7, 8, 9]]],
+        );
+        const threads = (yield* Ref.get(fixture.snapshots)).threads;
+        assert.deepEqual(
+          threads.map((thread) => thread.pullRequests.map((link) => link.number)),
+          [[11], [12], [13]],
+        );
+        assert.deepEqual(
+          new Set(
+            (yield* Ref.get(fixture.syncCommands)).map((sync) => `${sync.threadId}#${sync.number}`),
+          ),
+          new Set([`${child.id}#11`, `${fresh.id}#12`, `${parent.id}#13`]),
+        );
+      }).pipe(Effect.provide(fixture.layer));
+    }),
+  ),
+);

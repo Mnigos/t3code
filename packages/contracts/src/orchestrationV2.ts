@@ -3181,6 +3181,13 @@ const OrchestrationV2InternalCommand = Schema.Union([
       }),
     ),
   }),
+  /** Drops links outright, without the stack tombstone `thread.pull-request.unlink` leaves. */
+  Schema.Struct({
+    type: Schema.Literal("thread.pull-request.links.remove"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    keys: Schema.Array(ThreadPullRequestKey),
+  }),
   /** Records that the provider rollback `requestId` failed for good. */
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback.fail"),

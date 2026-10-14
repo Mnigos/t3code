@@ -23,6 +23,8 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EventStore from "./EventStore.ts";
+import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -623,4 +625,76 @@ it.effect("keeps delegated child pull-request links independent of the parent", 
     assert.deepEqual(parentAfterChildLink.thread.linkedPullRequest, parentPullRequest);
     assert.deepEqual(parentAfterChildLink.thread.pullRequests, parent.thread.pullRequests);
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("removes pull request links in one replayable event, without tombstones", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const threadId = ThreadId.make("thread:remove-links");
+    const projectId = ProjectId.make("project:remove-links");
+    const key = (number: number) => ({
+      host: "github.com",
+      repository: "pingdotgg/t3code",
+      number,
+    });
+    const url = (number: number) => `https://github.com/pingdotgg/t3code/pull/${number}`;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-remove-links"),
+      threadId,
+      projectId,
+      title: "Subagent with copied links",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "agent",
+      creationSource: "mcp",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.metadata.update",
+      commandId: CommandId.make("link-legacy"),
+      threadId,
+      linkedPullRequest: { projectId, repository: "pingdotgg/t3code", number: 7, url: url(7) },
+    });
+    for (const number of [8, 9]) {
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.make(`link-${number}`),
+        threadId,
+        ...key(number),
+        url: url(number),
+        source: "stack",
+      });
+    }
+    const result = yield* orchestrator.dispatch({
+      type: "thread.pull-request.links.remove",
+      commandId: CommandId.make("remove-links"),
+      threadId,
+      keys: [key(7), key(8)],
+    });
+    assert.deepEqual(
+      result.storedEvents.map((stored) => stored.event.type),
+      ["thread.pull-request-synced"],
+    );
+    const cleaned = yield* projections.getThread(threadId);
+    assert.deepEqual(
+      cleaned.pullRequests?.map((link) => [link.number, link.source]),
+      [[9, "stack"]],
+    );
+    assert.isNull(cleaned.linkedPullRequest);
+    assert.isTrue((yield* maintenance.rebuild).valid);
+    assert.deepEqual(yield* projections.getThread(threadId), cleaned);
+  }).pipe(
+    Effect.provide(
+      ProjectionMaintenance.layer.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(layerTest, EventStore.layer.pipe(Layer.provide(layerDatabase))),
+        ),
+      ),
+    ),
+  ),
 );
