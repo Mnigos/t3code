@@ -92,6 +92,7 @@ import {
 import { ACP_EMPTY_OPTION_VALUE, ACP_SESSION_MODE_OPTION_ID } from "./sessionConfig.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import {
+  isSlashCommandPrompt,
   t3AcpPromptWithInstructions,
   type T3AcpInstructionState,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
@@ -6850,13 +6851,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               detail: "ACP turn requires non-empty text or attachments",
             });
           }
-          prompt.push({
-            type: "text",
-            text: buildRuntimeInstructions({
-              harness: flavor.runtimeHarness ?? driver,
-              model: turnInput.modelSelection.model,
-            }),
-          });
+          // ACP agents such as Copilot only expand a slash command when it is the only text block.
+          if (!isSlashCommandPrompt(messageText)) {
+            prompt.push({
+              type: "text",
+              text: buildRuntimeInstructions({
+                harness: flavor.runtimeHarness ?? driver,
+                model: turnInput.modelSelection.model,
+              }),
+            });
+          }
           return { prompt, instructionState: text === messageText ? undefined : instructionState };
         });
 

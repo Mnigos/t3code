@@ -886,6 +886,94 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live("sends a slash command as the only ACP prompt block", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-slash-single-block");
+      const threadId = ThreadId.make("thread-acp-slash-single-block");
+      yield* (yield* McpProviderSessions.McpProviderSessions).set({
+        environmentId: EnvironmentId.make("environment-acp-slash-single-block"),
+        threadId,
+        providerSessionId: "mcp-session-acp-slash-single-block",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer slash-single-block-token",
+        browserToolsAvailable: false,
+      });
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents }),
+        },
+        selfInvocation,
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-slash-single-block"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      const runTurn = Effect.fnUntraced(function* (ordinal: number, messageText: string) {
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now,
+            ordinal,
+            messageText,
+          }),
+        );
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+        while (true) {
+          const event = yield* Queue.take(protocolEvents);
+          if (event.direction !== "outgoing") continue;
+          if (rawProtocolMethod(event) === "session/prompt") {
+            return rawProtocolRequestParam(event, "prompt");
+          }
+        }
+      });
+
+      assert.deepStrictEqual(yield* runTurn(0, "/repro-skill"), [
+        { type: "text", text: "/repro-skill" },
+      ]);
+
+      const followUp = yield* runTurn(1, "Ordinary follow-up.");
+      assert.isArray(followUp);
+      const followUpTexts = (followUp as Array<{ readonly text?: unknown }>).map(
+        (block) => block.text,
+      );
+      assert.lengthOf(followUpTexts, 2);
+      assert.include(String(followUpTexts[0]), "T3 Code orchestration");
+      assert.include(String(followUpTexts[0]), "Ordinary follow-up.");
+      assert.include(String(followUpTexts[1]), "<runtime_info>");
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.live("reapplies a selection after a switch away from it failed partway", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
