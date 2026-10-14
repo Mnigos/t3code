@@ -1458,6 +1458,7 @@ export const make = Effect.gen(function* () {
         const viewer = viewers[first.host]!;
         const cursor = cursorOf(first);
         const question = JSON.stringify([
+          viewer.toLowerCase(),
           input.state,
           involvement,
           input.query ?? null,
@@ -1524,7 +1525,8 @@ export const make = Effect.gen(function* () {
                   // empty, the search and the repository agree, and the same question is not
                   // asked of it again until the visibility expires. Scoped to the question, not
                   // the repository: one GitHub cannot search is silent to every question, and an
-                  // empty answer to this one says nothing about the rows another would find.
+                  // empty answer to this one says nothing about the rows another would find. The
+                  // viewer is part of the question, since "what I authored" differs per account.
                   const agreedKey = `${searchVisibilityKey(project.host, project.repository)}\n${question}`;
                   const agreedAt = searchVisibleAt.get(agreedKey);
                   const agreedEmpty =

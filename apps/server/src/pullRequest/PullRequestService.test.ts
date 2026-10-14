@@ -4575,6 +4575,44 @@ it.effect(
       assert.deepStrictEqual(searched, ["all", "all", "authored", "all"]);
     }),
 );
+it.effect("asks an empty repository again once a different account is listing", () =>
+  Effect.gen(function* () {
+    let account = "bilal";
+    const separately: Array<string> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getViewer: () => Effect.sync(() => account),
+          listChangeRequestsAcross: () =>
+            Effect.succeed({
+              items: [batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z")],
+              truncated: false,
+            }),
+          listChangeRequests: ({ repository }) =>
+            Effect.sync(() => {
+              separately.push(repository);
+              return { items: [], truncated: false, continues: false };
+            }),
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open", involvement: "authored" });
+    yield* service.invalidate({});
+    yield* service.list({ state: "open", involvement: "authored" });
+    assert.deepStrictEqual(separately, ["acme/docs"]);
+
+    // Nothing authored by one account says nothing about what another has authored there.
+    account = "octocat";
+    yield* service.invalidate({});
+    yield* service.list({ state: "open", involvement: "authored" });
+    assert.deepStrictEqual(separately, ["acme/docs", "acme/docs"]);
+  }),
+);
 it.effect("reads the repositories one at a time when the search itself fails", () =>
   Effect.gen(function* () {
     const separately: string[] = [];
