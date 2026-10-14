@@ -1254,7 +1254,9 @@ export const make = Effect.gen(function* () {
 
   // A repository that has appeared in a host search is known to be indexed there. Empty
   // authored/reviewing searches for that same repository are therefore real empty answers, not
-  // a reason to issue the two-command per-repository fallback again.
+  // a reason to issue the two-command per-repository fallback again. The same map also holds,
+  // under a key that adds the listing's question, the repositories whose own read agreed with
+  // the search's silence for that question.
   const searchVisibleAt = new Map<string, number>();
   const searchVisibilityKey = (host: string, repository: string) =>
     `${host}\n${repository.trim().toLowerCase()}`;
@@ -1455,6 +1457,12 @@ export const make = Effect.gen(function* () {
         if (readAcross === undefined) return separately();
         const viewer = viewers[first.host]!;
         const cursor = cursorOf(first);
+        const question = JSON.stringify([
+          input.state,
+          involvement,
+          input.query ?? null,
+          input.filters ?? null,
+        ]);
         return readAcross({
           cwd: first.project.workspaceRoot,
           host: first.host,
@@ -1511,12 +1519,36 @@ export const make = Effect.gen(function* () {
                     !page.truncated &&
                     lastVisible !== undefined &&
                     now - lastVisible <= Duration.toMillis(SEARCH_VISIBILITY_TTL);
+                  // A repository with nothing to match never shows up in a search, so it would
+                  // otherwise be read on its own on every listing. When that read also comes back
+                  // empty, the search and the repository agree, and the same question is not
+                  // asked of it again until the visibility expires. Scoped to the question, not
+                  // the repository: one GitHub cannot search is silent to every question, and an
+                  // empty answer to this one says nothing about the rows another would find.
+                  const agreedKey = `${searchVisibilityKey(project.host, project.repository)}\n${question}`;
+                  const agreedAt = searchVisibleAt.get(agreedKey);
+                  const agreedEmpty =
+                    agreedAt !== undefined &&
+                    now - agreedAt <= Duration.toMillis(SEARCH_VISIBILITY_TTL);
                   if (
                     fetched.length === 0 &&
                     cursorOf(project) === undefined &&
-                    !searchIsKnownVisible
+                    !searchIsKnownVisible &&
+                    !agreedEmpty
                   ) {
-                    return readRepository(project);
+                    return readRepository(project).pipe(
+                      Effect.tap((batch) =>
+                        Effect.sync(() => {
+                          if (
+                            batch.entries.length === 0 &&
+                            batch.errors.length === 0 &&
+                            batch.nextCursor === null
+                          ) {
+                            searchVisibleAt.set(agreedKey, now);
+                          }
+                        }),
+                      ),
+                    );
                   }
                   const cursorHere = cursorOf(project);
                   const items =

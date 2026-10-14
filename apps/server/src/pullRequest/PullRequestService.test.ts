@@ -4510,6 +4510,71 @@ it.effect("asks on its own for a repository a search answered nothing for", () =
     );
   }),
 );
+it.effect(
+  "stops reading a repository on its own once its read agrees with the search's silence",
+  () =>
+    Effect.gen(function* () {
+      const searched: Array<string> = [];
+      const separately: Array<string> = [];
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+          project({ id: "p3", title: "old", workspaceRoot: "/c", repository: "acme/renamed" }),
+        ],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            listChangeRequestsAcross: (input) =>
+              Effect.sync(() => {
+                searched.push(input.involvement);
+                return {
+                  items: [batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z")],
+                  truncated: false,
+                };
+              }),
+            // `acme/docs` has nothing to show; `acme/renamed` has rows the search cannot see.
+            listChangeRequests: ({ repository }) =>
+              Effect.sync(() => {
+                separately.push(repository);
+                return {
+                  items:
+                    repository === "acme/renamed" ? [changeRequest(2, "2026-07-02T00:00:00Z")] : [],
+                  truncated: false,
+                  continues: false,
+                };
+              }),
+          }),
+        ],
+      });
+
+      const first = yield* service.list({ state: "open" });
+      assert.deepStrictEqual(separately.toSorted(), ["acme/docs", "acme/renamed"]);
+      assert.deepStrictEqual(
+        first.entries.map((entry) => entry.number),
+        [1, 2],
+      );
+
+      // Past the listing cache, inside the visibility window: the empty repository is believed,
+      // and the one whose own read found what the search missed is still read on its own.
+      yield* TestClock.adjust("31 seconds");
+      const second = yield* service.list({ state: "open" });
+      assert.deepStrictEqual(separately.slice(2), ["acme/renamed"]);
+      assert.deepStrictEqual(
+        second.entries.map((entry) => entry.number),
+        [1, 2],
+      );
+
+      // The agreement covers the question it was reached for, not every question.
+      yield* service.list({ state: "open", involvement: "authored" });
+      assert.deepStrictEqual(separately.slice(3).toSorted(), ["acme/docs", "acme/renamed"]);
+
+      // Once the window has passed, the empty repository is checked again.
+      yield* TestClock.adjust("11 minutes");
+      yield* service.list({ state: "open" });
+      assert.deepStrictEqual(separately.slice(5).toSorted(), ["acme/docs", "acme/renamed"]);
+      assert.deepStrictEqual(searched, ["all", "all", "authored", "all"]);
+    }),
+);
 it.effect("reads the repositories one at a time when the search itself fails", () =>
   Effect.gen(function* () {
     const separately: string[] = [];
