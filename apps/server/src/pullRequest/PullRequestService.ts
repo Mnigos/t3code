@@ -1260,6 +1260,8 @@ export const make = Effect.gen(function* () {
   const searchVisibleAt = new Map<string, number>();
   const searchVisibilityKey = (host: string, repository: string) =>
     `${host}\n${repository.trim().toLowerCase()}`;
+  /** An agreement key carries the question after the host and repository. */
+  const isAgreementKey = (key: string) => key.indexOf("\n") !== key.lastIndexOf("\n");
 
   const listUncached: PullRequestService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
@@ -1528,10 +1530,12 @@ export const make = Effect.gen(function* () {
                   // empty answer to this one says nothing about the rows another would find. The
                   // viewer is part of the question, since "what I authored" differs per account.
                   // An empty read that stopped at its scan bound proves nothing, so it agrees with
-                  // nobody.
+                  // nobody. A search cut short says nothing about what it left out, so it cannot
+                  // lean on an agreement either, and a read that finds rows withdraws it.
                   const agreedKey = `${searchVisibilityKey(project.host, project.repository)}\n${question}`;
                   const agreedAt = searchVisibleAt.get(agreedKey);
                   const agreedEmpty =
+                    !page.truncated &&
                     agreedAt !== undefined &&
                     now - agreedAt <= Duration.toMillis(SEARCH_VISIBILITY_TTL);
                   if (
@@ -1550,6 +1554,8 @@ export const make = Effect.gen(function* () {
                             batch.nextCursor === null
                           ) {
                             searchVisibleAt.set(agreedKey, now);
+                          } else if (batch.entries.length > 0) {
+                            searchVisibleAt.delete(agreedKey);
                           }
                         }),
                       ),
@@ -3503,6 +3509,10 @@ export const make = Effect.gen(function* () {
       everyFileRevisionEpoch = ++epochCounter;
       viewersByHost.clear();
       yield* Cache.invalidateAll(viewerFlights);
+      // A refresh asks every repository again rather than trusting an earlier empty answer.
+      for (const key of searchVisibleAt.keys()) {
+        if (isAgreementKey(key)) searchVisibleAt.delete(key);
+      }
     }
     if (options?.notifyReaders) {
       yield* SubscriptionRef.set(pullRequestRefreshes, ++epochCounter);

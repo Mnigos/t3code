@@ -4632,15 +4632,92 @@ it.effect("asks an empty repository again once a different account is listing", 
       ],
     });
 
+    // The account is resolved here and held for its own window, which runs out before the
+    // agreement reached five minutes later does.
+    yield* service.list({ state: "closed", involvement: "authored" });
+    yield* TestClock.adjust("5 minutes");
     yield* service.list({ state: "open", involvement: "authored" });
-    yield* service.invalidate({});
+    yield* TestClock.adjust("31 seconds");
     yield* service.list({ state: "open", involvement: "authored" });
-    assert.deepStrictEqual(separately, ["acme/docs"]);
+    assert.deepStrictEqual(separately, ["acme/docs", "acme/docs"]);
 
     // Nothing authored by one account says nothing about what another has authored there.
     account = "octocat";
-    yield* service.invalidate({});
+    yield* TestClock.adjust("5 minutes");
     yield* service.list({ state: "open", involvement: "authored" });
+    assert.deepStrictEqual(separately, ["acme/docs", "acme/docs", "acme/docs"]);
+  }),
+);
+const agreementService = (
+  separately: Array<string>,
+  host: { truncated: boolean; docs: Array<ProviderChangeRequest> },
+) =>
+  makeService({
+    projects: [
+      project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+      project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+    ],
+    providers: [
+      fakeProvider(SourceControlProviderKind.make("github"), {
+        listChangeRequestsAcross: () =>
+          Effect.sync(() => ({
+            items: [batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z")],
+            truncated: host.truncated,
+          })),
+        listChangeRequests: ({ repository }) =>
+          Effect.sync(() => {
+            separately.push(repository);
+            return { items: host.docs, truncated: false, continues: false };
+          }),
+      }),
+    ],
+  });
+it.effect("reads an empty-agreed repository on its own when the search was cut short", () =>
+  Effect.gen(function* () {
+    const separately: Array<string> = [];
+    const host = { truncated: false, docs: [] as Array<ProviderChangeRequest> };
+    const service = yield* agreementService(separately, host);
+
+    yield* service.list({ state: "open" });
+    yield* TestClock.adjust("31 seconds");
+    host.truncated = true;
+    yield* service.list({ state: "open" });
+    assert.deepStrictEqual(separately, ["acme/docs", "acme/docs"]);
+  }),
+);
+it.effect("forgets an empty agreement once the repository's own read finds rows", () =>
+  Effect.gen(function* () {
+    const separately: Array<string> = [];
+    const host = { truncated: false, docs: [] as Array<ProviderChangeRequest> };
+    const service = yield* agreementService(separately, host);
+
+    yield* service.list({ state: "open" });
+    // A pull request opens in the empty repository, and a cut-short search finds it the long way.
+    yield* TestClock.adjust("31 seconds");
+    host.truncated = true;
+    host.docs = [changeRequest(2, "2026-07-02T00:00:00Z")];
+    yield* service.list({ state: "open" });
+
+    // The next complete search is still silent about it, and the row must not vanish.
+    yield* TestClock.adjust("31 seconds");
+    host.truncated = false;
+    const third = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(separately, ["acme/docs", "acme/docs", "acme/docs"]);
+    assert.deepStrictEqual(
+      third.entries.map((entry) => entry.number),
+      [1, 2],
+    );
+  }),
+);
+it.effect("asks an empty-agreed repository again after a refresh", () =>
+  Effect.gen(function* () {
+    const separately: Array<string> = [];
+    const host = { truncated: false, docs: [] as Array<ProviderChangeRequest> };
+    const service = yield* agreementService(separately, host);
+
+    yield* service.list({ state: "open" });
+    yield* service.invalidate({});
+    yield* service.list({ state: "open" });
     assert.deepStrictEqual(separately, ["acme/docs", "acme/docs"]);
   }),
 );
