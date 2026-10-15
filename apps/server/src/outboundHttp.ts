@@ -28,11 +28,13 @@ export const builtinFetchUsesHttp2 = (bundledUndiciVersion: string | undefined) 
  */
 export function installHttp1FetchDispatcher(): void {
   const undici = requireUndici("undici") as typeof Undici;
-  const options = { allowH2: false };
   // Node's agent comes from its internal undici copy, so `instanceof` against the npm class is false.
   const usesEnvProxy = undici.getGlobalDispatcher().constructor.name === "EnvHttpProxyAgent";
   undici.setGlobalDispatcher(
-    usesEnvProxy ? new undici.EnvHttpProxyAgent(options) : new undici.Agent(options),
+    usesEnvProxy
+      ? // The connection to an HTTPS proxy takes its options from `proxyTls`.
+        new undici.EnvHttpProxyAgent({ allowH2: false, proxyTls: { allowH2: false } })
+      : new undici.Agent({ allowH2: false }),
   );
 }
 
