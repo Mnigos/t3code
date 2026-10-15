@@ -29,6 +29,7 @@ export const builtinFetchUsesHttp2 = (bundledUndiciVersion: string | undefined) 
 export function installHttp1FetchDispatcher(): void {
   const undici = requireUndici("undici") as typeof Undici;
   const options = { allowH2: false };
+  // Node's agent comes from its internal undici copy, so `instanceof` against the npm class is false.
   const usesEnvProxy = undici.getGlobalDispatcher().constructor.name === "EnvHttpProxyAgent";
   undici.setGlobalDispatcher(
     usesEnvProxy ? new undici.EnvHttpProxyAgent(options) : new undici.Agent(options),
