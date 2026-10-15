@@ -34,7 +34,8 @@ export function installHttp1FetchDispatcher(): void {
     usesEnvProxy
       ? new undici.EnvHttpProxyAgent({
           allowH2: false,
-          // The connection to an HTTPS proxy is built here, not from `allowH2`.
+          // The connection to an HTTPS proxy is built here, not from `allowH2`. ProxyAgent's
+          // `connect` option is dropped on purpose: its connector has h2 fixed on.
           clientFactory: (origin) => new undici.Pool(origin, { allowH2: false }),
         })
       : new undici.Agent({ allowH2: false }),
