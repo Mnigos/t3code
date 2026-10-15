@@ -14,13 +14,6 @@ const requireUndici = NodeModule.createRequire(import.meta.url);
 export const builtinFetchUsesHttp2 = (bundledUndiciVersion: string | undefined) =>
   Number.parseInt(bundledUndiciVersion ?? "", 10) >= 8;
 
-// Read in the same order as undici's EnvHttpProxyAgent.
-const envProxyUris = () =>
-  [
-    process.env.http_proxy ?? process.env.HTTP_PROXY,
-    process.env.https_proxy ?? process.env.HTTPS_PROXY,
-  ].filter((uri): uri is string => uri !== undefined && uri !== "");
-
 /**
  * Replaces the process-wide fetch dispatcher with one that only speaks HTTP/1.1.
  *
@@ -41,12 +34,8 @@ export function installHttp1FetchDispatcher(): void {
     usesEnvProxy
       ? new undici.EnvHttpProxyAgent({
           allowH2: false,
-          // An HTTPS proxy connection takes its options from `proxyTls`, but undici
-          // reads any `proxyTls` as "speak TLS to a SOCKS proxy", so skip it there.
-          // Both proxies share these options, so a SOCKS + HTTPS mix keeps h2 to the HTTPS proxy.
-          ...(envProxyUris().some((uri) => /^socks/i.test(uri))
-            ? {}
-            : { proxyTls: { allowH2: false } }),
+          // The connection to an HTTPS proxy is built here, not from `allowH2`.
+          clientFactory: (origin) => new undici.Pool(origin, { allowH2: false }),
         })
       : new undici.Agent({ allowH2: false }),
   );
