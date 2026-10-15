@@ -43,7 +43,8 @@ export function installHttp1FetchDispatcher(): void {
           allowH2: false,
           // An HTTPS proxy connection takes its options from `proxyTls`, but undici
           // reads any `proxyTls` as "speak TLS to a SOCKS proxy", so skip it there.
-          ...(envProxyUris().some((uri) => uri.startsWith("socks"))
+          // Both proxies share these options, so a SOCKS + HTTPS mix keeps h2 to the HTTPS proxy.
+          ...(envProxyUris().some((uri) => /^socks/i.test(uri))
             ? {}
             : { proxyTls: { allowH2: false } }),
         })
