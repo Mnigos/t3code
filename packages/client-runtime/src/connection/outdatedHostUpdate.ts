@@ -15,17 +15,18 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as HttpClient from "effect/http/HttpClient";
+import * as RpcClient from "effect/rpc/RpcClient";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Socket from "effect/socket/Socket";
 
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
-import { makeWsRpcProtocolClient } from "../rpc/protocol.ts";
+import { makeWsRpcProtocolClient, PING_TIMEOUT } from "../rpc/protocol.ts";
 import { isLegacyUpdateHandoffLoss, resolveServerUpdateProgressResult } from "../state/server.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as ConnectionResolver from "./resolver.ts";
 import * as EnvironmentRegistry from "./registry.ts";
+import { connectionRoutes, hasRelayRoute, routeEntry, routeHttpBaseUrl } from "./routes.ts";
 
 // A v1 host restarting into v2 runs migrations before its descriptor answers again.
 const OUTDATED_HOST_RESTART_TIMEOUT = Duration.minutes(4);
@@ -42,12 +43,9 @@ export class OutdatedHostUpdateError extends Schema.TaggedError<OutdatedHostUpda
 export type OutdatedHostUpdateStage = "downloading" | "installing" | "resuming";
 
 /**
- * Updates a host whose orchestration protocol is too old for this client.
- *
- * The normal session refuses to open against such a host, so this opens a
- * bare socket and calls only the self-update RPCs, whose wire shape has not
- * changed across protocol versions. Once the host relaunches on a compatible
- * protocol the environment is switched back on and connects normally.
+ * The normal session refuses to open against such a host, so this opens a bare
+ * socket and calls only the self-update RPCs, whose wire shape has not changed
+ * across protocol versions.
  */
 export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutdatedHost")(
   function* (
@@ -63,7 +61,9 @@ export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutd
     if (entry === undefined) {
       return yield* new EnvironmentRegistry.EnvironmentNotRegisteredError({ environmentId });
     }
-    const { prepared, descriptor } = yield* resolver.prepareForUpdate(entry);
+    const { prepared, descriptor } = yield* Effect.firstSuccessOf(
+      connectionRoutes(entry).map((route) => resolver.prepareForUpdate(routeEntry(entry, route))),
+    );
     const capabilities = descriptor.capabilities;
     if (
       capabilities.serverSelfUpdate === undefined ||
@@ -82,6 +82,7 @@ export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutd
           Layer.effect(
             RpcClient.Protocol,
             RpcClient.makeProtocolSocket({
+              pingTimeout: PING_TIMEOUT,
               retryTransientErrors: false,
               retryPolicy: Schedule.recurs(0),
             }),
@@ -154,9 +155,21 @@ export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutd
     );
 
     yield* onStage("resuming");
-    const resumed = yield* fetchRemoteEnvironmentDescriptor({
-      httpBaseUrl: prepared.httpBaseUrl,
-    }).pipe(
+    const pollUrls = [
+      prepared.httpBaseUrl,
+      ...connectionRoutes(entry).flatMap((route) => routeHttpBaseUrl(route) ?? []),
+    ].filter((url, index, all) => all.indexOf(url) === index);
+    const resumed = yield* Effect.firstSuccessOf(
+      pollUrls.map((httpBaseUrl) =>
+        fetchRemoteEnvironmentDescriptor({ httpBaseUrl }).pipe(
+          Effect.filterOrFail(
+            (descriptor) =>
+              descriptor.environmentId === environmentId && isCompatibleDescriptor(descriptor),
+            () => "not-ready" as const,
+          ),
+        ),
+      ),
+    ).pipe(
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.option,
       Effect.repeat({
@@ -175,7 +188,7 @@ export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutd
 
     // Discovery still holds the old relay descriptor and would re-block the
     // environment from it, so replace that before clearing the block.
-    if (entry.target._tag === "RelayConnectionTarget") {
+    if (hasRelayRoute(entry)) {
       const discovery = yield* RelayEnvironmentDiscovery.RelayEnvironmentDiscovery;
       yield* discovery.refresh;
     }

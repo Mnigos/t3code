@@ -10,9 +10,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as Socket from "effect/socket/Socket";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
@@ -51,7 +51,6 @@ const encodeDescriptor = Schema.encodeSync(Schema.fromJsonString(ExecutionEnviro
 
 type Listener = (event: { readonly type: string; readonly data?: unknown }) => void;
 
-/** Answers update RPCs the way a protocol-1 server does. */
 class OutdatedHostSocket {
   static readonly OPEN = 1;
   readyState = 0;
@@ -186,7 +185,6 @@ describe("updateOutdatedHost", () => {
             ),
             Layer.succeed(HttpClient.HttpClient, httpClient),
             Layer.succeed(Socket.WebSocketConstructor, (url) => {
-              // The host relaunches on a compatible protocol once the update lands.
               const socket = new OutdatedHostSocket(url, () => {
                 served = descriptor(ORCHESTRATION_PROTOCOL_VERSION, "0.0.46");
               });
