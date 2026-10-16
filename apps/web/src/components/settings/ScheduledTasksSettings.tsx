@@ -1,4 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
+import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 import {
   Clock3Icon,
   CopyIcon,
@@ -54,12 +57,18 @@ import {
   type EnvironmentPresentation,
 } from "../../state/environments";
 import { useProjects } from "../../state/entities";
-import { useEnvironmentQuery } from "../../state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionStatusDot";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { readEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { EnvironmentRow, environmentTransportLabel } from "./EnvironmentRow";
+import { SettingsGroup } from "./SettingsGroup";
+import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
   WEBHOOK_SIGNATURE_DEFAULTS,
   matchesScheduledTaskScope,
@@ -92,6 +101,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -100,7 +110,6 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 
-/** JS day-of-week (0 = Sunday) rendered Monday-first, matching how people read a week. */
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
@@ -136,7 +145,6 @@ const EMPTY_DRAFT: DraftState = {
   maxDeliveryAgeMinutes: "",
 };
 
-/** Labelled field: a caption sitting above its control. */
 function Field({
   label,
   hint,
@@ -189,9 +197,9 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
 }
 
 /**
- * Human label for a run timestamp. `formatRelativeTime` only handles the
- * past, and `nextRunAt` is a future instant — render "in 5m" style labels
- * for upcoming runs instead of a misleading "just now".
+ * `formatRelativeTime` only handles the past, and `nextRunAt` is a future
+ * instant — render "in 5m" style labels for upcoming runs instead of a
+ * misleading "just now".
  */
 export function relativeLabel(value: string | null): string {
   if (!value) return "Not scheduled";
@@ -246,6 +254,9 @@ export function ScheduledTasksSettings(target: {
     setEditor({ environmentId, task });
   }, []);
   const defaultEnvironment = environment ?? connectedEnvironments[0];
+  const canCreate = useAtomValue(
+    serverEnvironment.upsertScheduledTask.permissionAtom(defaultEnvironment?.environmentId ?? null),
+  );
   return (
     <SettingsPageContainer>
       <SettingsSection
@@ -255,7 +266,7 @@ export function ScheduledTasksSettings(target: {
           <Button
             size="xs"
             variant="ghost-muted"
-            disabled={!defaultEnvironment}
+            disabled={!defaultEnvironment || !canCreate}
             onClick={() =>
               defaultEnvironment &&
               setEditor({ environmentId: defaultEnvironment.environmentId, task: null })
@@ -280,6 +291,13 @@ export function ScheduledTasksSettings(target: {
               <EmptyDescription>Connect an environment to manage scheduled tasks.</EmptyDescription>
             </EmptyHeader>
           </Empty>
+        ) : environments.length > 1 ? (
+          <ScheduledTaskEnvironmentList
+            key={`${target.environmentId ?? defaultEnvironment?.environmentId}:${target.taskId ?? ""}`}
+            environmentId={target.environmentId ?? defaultEnvironment?.environmentId}
+            taskId={target.taskId}
+            onEdit={openForEdit}
+          />
         ) : (
           <div className="space-y-8">
             {environments.map((entry) => (
@@ -308,6 +326,153 @@ export function ScheduledTasksSettings(target: {
         />
       ) : null}
     </SettingsPageContainer>
+  );
+}
+
+function ScheduledTaskEnvironmentList({
+  environmentId,
+  taskId,
+  onEdit,
+}: {
+  readonly environmentId: EnvironmentId | undefined;
+  readonly taskId: ScheduledTaskId | undefined;
+  readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
+}) {
+  const { scope, environments } = useSettingsScope();
+  const states = useAtomValue(
+    useMemo(
+      () =>
+        Atom.make((get) =>
+          environments.map((environment) => {
+            const connected =
+              environment.connection.phase === "connected" && environment.serverConfig !== null;
+            const query = connected
+              ? get(
+                  serverEnvironment.scheduledTasksLive({
+                    environmentId: environment.environmentId,
+                    input: {},
+                  }),
+                )
+              : null;
+            const data = query === null ? null : Option.getOrNull(AsyncResult.value(query));
+            return {
+              environment,
+              connected,
+              tasks: data?.tasks.filter((task) =>
+                matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
+              ),
+              error: query?._tag === "Failure" ? formatEnvironmentQueryError(query.cause) : null,
+            };
+          }),
+        ),
+      [environments, scope],
+    ),
+  );
+  const linkedState = states.find((state) => state.environment.environmentId === environmentId);
+  const linkedTask = linkedState?.tasks?.find((task) => task.id === taskId);
+  const openedLink = useRef(false);
+  useEffect(() => {
+    if (!openedLink.current && environmentId && linkedTask) {
+      openedLink.current = true;
+      onEdit(environmentId, linkedTask);
+    }
+  }, [environmentId, linkedTask, onEdit]);
+  useRelativeTimeTick(60_000);
+
+  const loaded = states.filter((state) => state.connected && state.error === null && state.tasks);
+  const populated = loaded.filter((state) => state.tasks && state.tasks.length > 0);
+  const summaries: Record<string, string[]> = {
+    "Not connected:": [],
+    "Loading scheduled tasks on": [],
+    "Could not load scheduled tasks:": [],
+    "No tasks on": [],
+  };
+  for (const { environment, connected, tasks, error } of states) {
+    const label = settingsScopeEnvironmentLabel(environment, environments);
+    if (!connected) {
+      summaries["Not connected:"]!.push(
+        `${label} (${connectionStatusTitle(environment.connection)})`,
+      );
+    } else if (error !== null) {
+      summaries["Could not load scheduled tasks:"]!.push(`${label}: ${error}`);
+    } else if (!tasks) {
+      summaries["Loading scheduled tasks on"]!.push(label);
+    } else if (tasks.length === 0 && populated.length > 0) {
+      summaries["No tasks on"]!.push(label);
+    }
+  }
+
+  return (
+    <SettingsGroup>
+      {populated.map(({ environment, tasks }) => {
+        const { primary, secondary } = settingsScopeEnvironmentLabels(environment, environments);
+        const transport = environmentTransportLabel(environment);
+        return (
+          <div key={environment.environmentId} className="divide-y divide-border/50">
+            <EnvironmentRow
+              kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+              label={primary}
+              subtitle={
+                <>
+                  {secondary && secondary !== transport ? (
+                    <span className="block truncate">{secondary}</span>
+                  ) : null}
+                  <span className="block truncate">{transport}</span>
+                </>
+              }
+            >
+              <ConnectionStatusDot
+                dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
+                tooltipText={connectionStatusTitle(environment.connection)}
+              />
+              <span className="text-xs text-muted-foreground">
+                {connectionStatusTitle(environment.connection)}
+              </span>
+            </EnvironmentRow>
+            {tasks?.map((task) => (
+              <ScheduledTaskRow
+                key={task.id}
+                environmentId={environment.environmentId}
+                task={task}
+                onEdit={() => onEdit(environment.environmentId, task)}
+              />
+            ))}
+          </div>
+        );
+      })}
+      {taskId && linkedState?.tasks && linkedState.error === null && !linkedTask ? (
+        <SettingsRow
+          title="Task unavailable"
+          description="This task no longer exists or is outside the selected project scope."
+          role="status"
+        />
+      ) : null}
+      {populated.length === 0 && loaded.length > 0 ? (
+        <SettingsRow
+          title="No scheduled tasks"
+          description="No tasks match this environment and project selection."
+        />
+      ) : null}
+      {Object.entries(summaries).map(([label, entries]) => {
+        if (entries.length === 0) return null;
+        const summary = `${label} ${entries.join(", ")}`;
+        return (
+          <Tooltip key={label}>
+            <TooltipTrigger
+              render={
+                <p
+                  className="truncate px-3 py-2.5 text-xs text-muted-foreground sm:px-4"
+                  role="status"
+                />
+              }
+            >
+              {summary}
+            </TooltipTrigger>
+            <TooltipPopup>{summary}</TooltipPopup>
+          </Tooltip>
+        );
+      })}
+    </SettingsGroup>
   );
 }
 
@@ -404,6 +569,9 @@ function ScheduledTaskRow({
   readonly task: ScheduledTask;
   readonly onEdit: () => void;
 }) {
+  const canOperate = useAtomValue(
+    serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
+  );
   const [busy, setBusy] = useState(false);
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
   const isWebhook = task.schedule.type === "webhook";
@@ -417,7 +585,7 @@ function ScheduledTaskRow({
     label: "scheduled task delete",
   });
   const act = async (action: "toggle" | "run" | "delete") => {
-    if (busy) return;
+    if (busy || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
     setBusy(true);
     const result =
       action === "toggle"
@@ -462,7 +630,7 @@ function ScheduledTaskRow({
         <div className="flex items-center gap-2">
           <Switch
             checked={task.enabled}
-            disabled={busy}
+            disabled={busy || !canOperate}
             aria-label={`Enable ${task.title}`}
             onCheckedChange={() => void act("toggle")}
           />
@@ -472,7 +640,7 @@ function ScheduledTaskRow({
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  disabled={busy}
+                  disabled={busy || !canOperate}
                   aria-label={`Actions for ${task.title}`}
                 />
               }
@@ -668,6 +836,9 @@ function WebhookEndpointField({
   readonly environmentId: EnvironmentId;
   readonly task: ScheduledTask | null;
 }) {
+  const canRotate = useAtomValue(
+    serverEnvironment.rotateScheduledTaskWebhookToken.permissionAtom(environmentId),
+  );
   const httpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "webhook URL" });
   const rotate = useAtomCommand(serverEnvironment.rotateScheduledTaskWebhookToken, {
@@ -683,10 +854,7 @@ function WebhookEndpointField({
     const confirmed =
       (await requestConfirmDialog("Rotate this webhook URL?\nThe current URL stops working.", {
         variant: "destructive",
-      })) ??
-      // No themed dialog host is mounted; fall back to the native prompt
-      // rather than rotating unasked.
-      window.confirm("Rotate this webhook URL? The current URL stops working.");
+      })) ?? window.confirm("Rotate this webhook URL? The current URL stops working.");
     if (!confirmed) return;
     setRotating(true);
     const result = await rotate({ environmentId, input: { id: task.id } });
@@ -714,7 +882,6 @@ function WebhookEndpointField({
           size="sm"
           variant="outline"
           type="button"
-          // A bare path is not a URL a sender can call.
           disabled={!copyable}
           onClick={() => copyToClipboard(url, undefined)}
         >
@@ -725,7 +892,7 @@ function WebhookEndpointField({
           size="sm"
           variant="outline"
           type="button"
-          disabled={rotating}
+          disabled={rotating || !canRotate}
           onClick={() => void rotateUrl()}
         >
           Rotate
@@ -737,11 +904,6 @@ function WebhookEndpointField({
   );
 }
 
-/**
- * Whether T3 Connect forwards requests live or holds them while the
- * environment is offline. The setting is per environment and only readable
- * for this machine's own environment, so other environments show nothing.
- */
 function WebhookDeliveryMode({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const cloudLink = usePrimaryCloudLinkState();
   if (cloudLink.target?.environmentId !== environmentId || cloudLink.data === null) return null;
@@ -787,16 +949,12 @@ function ScheduledTaskEditorDialog({
   const settings = useEnvironmentSettings(environmentId);
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const canOperate = useAtomValue(
+    serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
+  );
   const upsertTask = useAtomCommand(serverEnvironment.upsertScheduledTask, {
     label: "scheduled task upsert",
   });
-  const instanceEntries = useMemo(
-    () =>
-      sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
-      ),
-    [providers, settings],
-  );
   const [draft, setDraft] = useState<DraftState>(() =>
     task ? taskToDraft(task) : { ...EMPTY_DRAFT, projectId: projects[0]?.id ?? "" },
   );
@@ -806,20 +964,30 @@ function ScheduledTaskEditorDialog({
     draft.editingId !== null &&
     tasksQuery.data !== null &&
     !tasksQuery.data.tasks.some((entry) => entry.id === draft.editingId);
-  // The live row, so a rotated URL shows up without reopening the dialog.
-  // Once the list has loaded, a missing task is gone; don't keep showing its URL.
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const instanceEntries = useMemo(
+    () =>
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(providers),
+          settings,
+          selectedProject?.id ?? null,
+        ),
+      ),
+    [providers, settings, selectedProject?.id],
+  );
 
-  // The real model picker is keyed by a `${instanceId}:${model}` string, which
-  // is exactly how the draft stores its selection.
   const firstInstance = instanceEntries[0];
-  const activeSelection = draft.modelKey
-    ? splitModelKey(draft.modelKey)
-    : scheduledTaskDefaultModel(settings, selectedProject ?? null, instanceEntries);
+  const draftSelection = draft.modelKey ? splitModelKey(draft.modelKey) : null;
+  const activeSelection =
+    draftSelection &&
+    instanceEntries.some((entry) => entry.instanceId === draftSelection.instanceId && entry.enabled)
+      ? draftSelection
+      : scheduledTaskDefaultModel(settings, selectedProject ?? null, instanceEntries);
   const activeInstanceId =
     activeSelection?.instanceId ?? firstInstance?.instanceId ?? ("" as ProviderInstanceId);
   const activeModel = activeSelection?.model ?? "";
@@ -840,6 +1008,7 @@ function ScheduledTaskEditorDialog({
 
   const submit = async () => {
     if (
+      !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       submissionPending.current ||
       saving ||
       editingTaskMissing ||
@@ -886,8 +1055,6 @@ function ScheduledTaskEditorDialog({
       reportFailure("Checkout path is required", "Enter the path of the checkout to run in.");
       return;
     }
-    // Keep the original selection object (with provider options) when the
-    // picker still points at the same instance+model.
     const modelSelection =
       draft.baseModelSelection !== null &&
       draft.baseModelSelection.instanceId === selection.instanceId &&
@@ -985,15 +1152,34 @@ function ScheduledTaskEditorDialog({
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
-                  {connectedEnvironments.map((entry) => (
-                    <SelectItem key={entry.environmentId} value={entry.environmentId}>
-                      <EnvironmentMachineIcon
-                        kind={resolveEnvironmentMachineKind(entry.serverConfig)}
-                        className="size-4"
-                      />
-                      {entry.label}
-                    </SelectItem>
-                  ))}
+                  {connectedEnvironments.map((entry) => {
+                    const { secondary } = settingsScopeEnvironmentLabels(
+                      entry,
+                      connectedEnvironments,
+                    );
+                    return (
+                      <SelectItem
+                        key={entry.environmentId}
+                        value={entry.environmentId}
+                        label={entry.label}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <EnvironmentMachineIcon
+                            kind={resolveEnvironmentMachineKind(entry.serverConfig)}
+                            className="size-4"
+                          />
+                          <span className="min-w-0">
+                            <span className="block truncate">{entry.label}</span>
+                            {secondary ? (
+                              <span className="block max-w-72 truncate text-xs text-muted-foreground">
+                                {secondary}
+                              </span>
+                            ) : null}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectPopup>
               </Select>
             </Field>
@@ -1033,8 +1219,18 @@ function ScheduledTaskEditorDialog({
                   </SelectTrigger>
                   <SelectPopup>
                     {projects.map((project) => (
-                      <SelectItem key={project.id} value={project.id}>
-                        {project.title}
+                      <SelectItem key={project.id} value={project.id} label={project.title}>
+                        <span className="block truncate">{project.title}</span>
+                        {allProjects.some(
+                          (other) =>
+                            other.title === project.title &&
+                            (other.environmentId !== project.environmentId ||
+                              other.id !== project.id),
+                        ) ? (
+                          <span className="block max-w-72 truncate text-xs text-muted-foreground">
+                            {project.workspaceRoot}
+                          </span>
+                        ) : null}
                       </SelectItem>
                     ))}
                   </SelectPopup>
@@ -1106,19 +1302,22 @@ function ScheduledTaskEditorDialog({
             </Field>
 
             <Field label="Model">
-              <ProviderModelPicker
-                disabled={saving || !connected}
-                activeInstanceId={activeInstanceId}
-                model={activeModel}
-                lockedProvider={null}
-                instanceEntries={instanceEntries}
-                modelOptionsByInstance={modelOptionsByInstance}
-                isComposerOwned={false}
-                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
-                }
-              />
+              <div>
+                <ProviderModelPicker
+                  environmentId={environmentId}
+                  disabled={saving || !connected}
+                  activeInstanceId={activeInstanceId}
+                  model={activeModel}
+                  lockedProvider={null}
+                  instanceEntries={instanceEntries}
+                  modelOptionsByInstance={modelOptionsByInstance}
+                  isComposerOwned={false}
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  onInstanceModelChange={(instanceId, model) =>
+                    setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+                  }
+                />
+              </div>
             </Field>
 
             <div className="space-y-3">
@@ -1348,7 +1547,7 @@ function ScheduledTaskEditorDialog({
           </DialogClose>
           <Button
             size="sm"
-            disabled={saving || editingTaskMissing || !connected || !tasksQuery.data}
+            disabled={!canOperate || saving || editingTaskMissing || !connected || !tasksQuery.data}
             onClick={() => void submit()}
           >
             {draft.editingId ? "Save task" : "Create task"}

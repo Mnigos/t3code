@@ -12,21 +12,33 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback } from "react";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { useFilesystemReadAccess } from "~/state/filesystem";
 import { projectEnvironment } from "~/state/projects";
 import { useProjectPathSearch } from "~/state/queries";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 
 const EMPTY_PROJECT_FILE_PATH = "";
+const EMPTY_PROJECT_ENTRIES_QUERY_ATOM = Atom.make(
+  AsyncResult.initial<ProjectListEntriesResult, never>(false),
+);
 const EMPTY_PROJECT_FILE_QUERY_ATOM = Atom.make(
   AsyncResult.initial<ProjectReadFileResult, never>(false),
 ).pipe(Atom.withLabel("project-file-query:empty"));
-/** A pending in-app write to the file, overlaying the query until confirmed. */
 export function optimisticFileAtom(
   environmentId: EnvironmentId,
   cwd: string,
   relativePath: string,
 ) {
   return projectEnvironment.optimisticFile({ environmentId, cwd, relativePath });
+}
+
+// Dirty contents must survive a closed preview, including failed or unauthorized saves.
+const unsavedFileMounts = new Map<ReturnType<typeof optimisticFileAtom>, () => void>();
+
+function releaseUnsavedFile(atom: ReturnType<typeof optimisticFileAtom>): void {
+  const unmount = unsavedFileMounts.get(atom);
+  unsavedFileMounts.delete(atom);
+  unmount?.();
 }
 
 interface ProjectQueryState<A> {
@@ -38,7 +50,6 @@ interface ProjectQueryState<A> {
 
 interface ProjectFileQueryState extends ProjectQueryState<ProjectReadFileResult> {
   readonly readError: ProjectReadFileError | null;
-  /** The path exists but is not a regular file, typically a directory. */
   readonly isNotFile: boolean;
 }
 
@@ -70,7 +81,11 @@ export function setProjectFileQueryData(
   relativePath: string,
   contents: string,
 ): void {
-  appAtomRegistry.set(optimisticFileAtom(environmentId, cwd, relativePath), {
+  const atom = optimisticFileAtom(environmentId, cwd, relativePath);
+  if (!unsavedFileMounts.has(atom)) {
+    unsavedFileMounts.set(atom, appAtomRegistry.mount(atom));
+  }
+  appAtomRegistry.set(atom, {
     confirmedAgainst: undefined,
     data: {
       relativePath,
@@ -89,7 +104,6 @@ export function getOptimisticProjectFileQueryData(
   return appAtomRegistry.get(optimisticFileAtom(environmentId, cwd, relativePath))?.data ?? null;
 }
 
-/** The contents the Files panel shows, read outside React so it is current within a frame. */
 export function getProjectFileContents(
   environmentId: EnvironmentId,
   cwd: string,
@@ -99,6 +113,15 @@ export function getProjectFileContents(
   if (optimistic) return optimistic.contents;
   const result = appAtomRegistry.get(getProjectFileQueryAtom(environmentId, cwd, relativePath));
   return Option.getOrUndefined(AsyncResult.value(result))?.contents;
+}
+
+export function getUnsavedProjectFileQueryData(
+  environmentId: EnvironmentId,
+  cwd: string,
+  relativePath: string,
+): ProjectReadFileResult | null {
+  const optimistic = appAtomRegistry.get(optimisticFileAtom(environmentId, cwd, relativePath));
+  return optimistic?.confirmedAgainst === undefined ? (optimistic?.data ?? null) : null;
 }
 
 export function confirmProjectFileQueryData(
@@ -117,6 +140,7 @@ export function confirmProjectFileQueryData(
     confirmedAgainst: appAtomRegistry.get(queryAtom),
   };
   appAtomRegistry.set(atom, confirmed);
+  releaseUnsavedFile(atom);
   appAtomRegistry.refresh(queryAtom);
   void executeAtomQuery(appAtomRegistry, queryAtom, {
     reportDefect: false,
@@ -144,7 +168,9 @@ export function clearProjectFileQueryData(
   cwd: string,
   relativePath: string,
 ): void {
-  appAtomRegistry.set(optimisticFileAtom(environmentId, cwd, relativePath), null);
+  const atom = optimisticFileAtom(environmentId, cwd, relativePath);
+  appAtomRegistry.set(atom, null);
+  releaseUnsavedFile(atom);
 }
 
 function failureCause<A>(result: AsyncResult.AsyncResult<A, unknown>): unknown {
@@ -163,25 +189,30 @@ export function useProjectEntriesQuery(
   cwd: string,
   directoryPath?: string,
 ): ProjectQueryState<ProjectListEntriesResult> {
-  const atom = getProjectEntriesQueryAtom(environmentId, cwd, directoryPath);
+  const fileAccess = useFilesystemReadAccess(environmentId);
+  const { canReadFiles } = fileAccess;
+  const atom = canReadFiles
+    ? getProjectEntriesQueryAtom(environmentId, cwd, directoryPath)
+    : EMPTY_PROJECT_ENTRIES_QUERY_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);
   const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
-    error: errorMessage(failureCause(result)),
-    isPending: result.waiting,
+    error: fileAccess.isPending
+      ? null
+      : canReadFiles
+        ? errorMessage(failureCause(result))
+        : (fileAccess.error ?? "This connection cannot read host files."),
+    isPending: fileAccess.isPending || result.waiting,
     refresh,
   };
 }
 
 /**
- * Backing query for the project file picker: a debounced, bounded, file-only
- * server search. An empty query is a valid request — the index answers it
- * with frecency-ordered files, so the picker's initial view is recent files
- * without transferring the full workspace listing. `matchedQuery` is the
- * query the returned entries were computed for, so the caller can highlight
- * against results instead of half-typed input.
+ * An empty query is a valid request — the index answers it with
+ * frecency-ordered files, so the picker's initial view is recent files without
+ * transferring the full workspace listing.
  */
 export function useProjectFilePickerQuery(
   environmentId: EnvironmentId,
@@ -216,11 +247,15 @@ export function useProjectFileQuery(
   relativePath: string | null,
   enabled = true,
 ): ProjectFileQueryState {
-  // The caller decides what to read. A media path is not skipped here: a folder
-  // named `assets.png` is only knowable as a folder from the read failure.
-  const atom = enabled
-    ? getProjectFileQueryAtom(environmentId, cwd, relativePath)
-    : EMPTY_PROJECT_FILE_QUERY_ATOM;
+  // A media path is not skipped here: a folder named `assets.png` is only
+  // knowable as a folder from the read failure.
+  const fileAccess = useFilesystemReadAccess(environmentId);
+  const { canReadFiles } = fileAccess;
+  const isQueryEnabled = enabled;
+  const atom =
+    enabled && canReadFiles
+      ? getProjectFileQueryAtom(environmentId, cwd, relativePath)
+      : EMPTY_PROJECT_FILE_QUERY_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);
   const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
@@ -233,11 +268,16 @@ export function useProjectFileQuery(
   const readError = isProjectReadFileError(cause) ? cause : null;
 
   return {
-    data: optimisticFile?.data ?? data,
-    error: errorMessage(cause),
+    data: canReadFiles ? (optimisticFile?.data ?? data) : null,
+    error:
+      !isQueryEnabled || fileAccess.isPending
+        ? null
+        : canReadFiles
+          ? errorMessage(cause)
+          : (fileAccess.error ?? "This connection cannot read host files."),
+    isPending: isQueryEnabled && (fileAccess.isPending || result.waiting),
     readError,
     isNotFile: readError?.failure === "path_not_file",
-    isPending: result.waiting,
     refresh,
   };
 }
