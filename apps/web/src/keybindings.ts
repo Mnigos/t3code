@@ -18,6 +18,7 @@ import {
   type ShortcutModifierStateLike,
 } from "@t3tools/shared/keybindings";
 import { isElectron } from "./env";
+import { projectScriptIdFromCommand } from "./projectScripts";
 
 export type { ShortcutEventLike, ShortcutModifierStateLike } from "@t3tools/shared/keybindings";
 export { shortcutKeyFromEvent } from "@t3tools/shared/keybindings";
@@ -29,8 +30,6 @@ export interface ShortcutMatchContext {
   previewOpen: boolean;
   isWeb: boolean;
   isDesktop: boolean;
-  /** A text field, textarea, select or rich-text editor owns the keyboard.
-      Optional: only chords that collide with native editing consult it. */
   editableFocus?: boolean;
   [key: string]: boolean;
 }
@@ -169,6 +168,23 @@ export function resolveShortcutCommand(
   return null;
 }
 
+export function resolveChatShortcutCommand(
+  event: ShortcutEventLike,
+  primaryKeybindings: ResolvedKeybindingsConfig,
+  activeKeybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): KeybindingCommand | null {
+  const primaryCommand = resolveShortcutCommand(event, primaryKeybindings, options);
+  if (primaryCommand !== null && projectScriptIdFromCommand(primaryCommand) === null) {
+    return primaryCommand;
+  }
+
+  const activeCommand = resolveShortcutCommand(event, activeKeybindings, options);
+  return activeCommand !== null && projectScriptIdFromCommand(activeCommand) !== null
+    ? activeCommand
+    : null;
+}
+
 export function formatShortcutKeyLabel(key: string): string {
   if (key === " ") return "Space";
   if (key.length === 1) return key.toUpperCase();
@@ -241,12 +257,9 @@ export function shouldShowThreadJumpHintsForModifiers(
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
-  // The embedded terminal owns keystrokes while it has focus: the Ghostty
-  // surface encodes the keydown and can write the pressed key into the shell
-  // before our window-level shortcut handling ever runs, regardless of any
-  // configured `when` clause on the jump command. Advertising jump hints
-  // here would promise a shortcut that instead types into the terminal, so
-  // never show them while the terminal is focused.
+  // The embedded terminal owns keystrokes while it has focus: the Ghostty surface encodes the
+  // keydown and can write the pressed key into the shell before our window-level shortcut handling
+  // ever runs, regardless of any configured `when` clause on the jump command.
   if (resolveContext(options).terminalFocus) {
     return false;
   }

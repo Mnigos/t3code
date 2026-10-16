@@ -35,7 +35,7 @@ interface DiffCommentAnnotationGroup {
 }
 
 type DiffCommentLineAnnotation = DiffLineAnnotation<DiffCommentAnnotationGroup>;
-export type AnnotatableCodeViewHandle = CodeViewHandle<DiffCommentAnnotationGroup>;
+export type AnnotatableCodeViewHandle = CodeViewHandle<DiffCommentAnnotationGroup, undefined>;
 const EMPTY_REVIEW_COMMENTS: ReadonlyArray<ReviewCommentContext> = [];
 
 function annotationSide(range: SelectedLineRange): AnnotationSide {
@@ -95,6 +95,7 @@ interface AnnotatableCodeViewProps {
     fileKey: string,
     collapsed: boolean,
   ) => ReactNode;
+  onRevealSearchMatch: (fileKey: string) => void;
 }
 
 interface DiffSelectionContext {
@@ -115,6 +116,7 @@ export function AnnotatableCodeView({
   renderHeaderMetadata,
   renderHeaderFilenameSuffix,
   renderHeaderPrefix,
+  onRevealSearchMatch,
 }: AnnotatableCodeViewProps) {
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const removeReviewComment = useComposerDraftStore((store) => store.removeReviewComment);
@@ -262,6 +264,7 @@ export function AnnotatableCodeView({
       items={items}
       selectedLines={selectedLines}
       onSelectedLinesChange={setSelectedLines}
+      onRevealSearchMatch={(item) => onRevealSearchMatch(item.id)}
       options={{
         ...options,
         enableGutterUtility: !hasOpenComment,
