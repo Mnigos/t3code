@@ -73,7 +73,7 @@ function fixture(
           request,
           Response.json({}, { status: options.cooldownStatus ?? 200 }),
         );
-      expect(path).toBe("/v0/management/api-call");
+      expect(path).toMatch(/\/v0\/management\/api-call$/);
       expect(body?.header?.Authorization).toBe("Bearer $TOKEN$");
       const upstream = options.upstream?.(body!) ?? {
         status: 200,
@@ -143,6 +143,18 @@ describe("CLIProxyAPI built-in management API", () => {
           ],
         ).toBe("account-b");
       }),
+  );
+
+  it.effect("keeps the path of a hub served under a prefix", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      const api = yield* test.api;
+      yield* api.readAccounts({ ...config, url: "https://tools.test/cliproxy" });
+      expect(test.requests.length).toBeGreaterThan(0);
+      expect(
+        test.requests.every((request) => request.path.startsWith("/cliproxy/v0/management/")),
+      ).toBe(true);
+    }),
   );
 
   it.effect("keeps usage when the credits endpoint fails", () =>
@@ -226,7 +238,6 @@ describe("CLIProxyAPI built-in management API", () => {
       expect(redemptions[0]?.body?.data).toBe(redemptions[1]?.body?.data);
       expect(redemptions[0]?.body?.data).toBe(
         encodeJson({
-          // UUIDv5 of "account-b:credit-b"; must stay stable so retries deduplicate.
           redeem_request_id: "519d5243-011a-5b7b-91f3-44d85f095705",
           credit_id: "credit-b",
         }),

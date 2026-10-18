@@ -4,6 +4,7 @@ import {
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
   type DesktopBridge,
+  type DesktopServerExposureState,
   type DesktopUpdateState,
   type DesktopWslState,
 } from "@t3tools/contracts";
@@ -35,7 +36,6 @@ export function togglePairingScopeSelection(
     : next;
 }
 
-/** A missing access list says nothing about whether other clients exist. */
 export function canRevokeOtherClients(
   clientSessions: ReadonlyArray<{ readonly current: boolean }> | null,
 ): boolean {
@@ -51,6 +51,20 @@ type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistr
  */
 export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
   return endpoint.status !== "unavailable" && endpoint.reachability !== "loopback";
+}
+
+/**
+ * Copy for the Tailscale HTTPS row when no Tailscale endpoint is advertised.
+ * The desktop skips the Tailscale probe until Network access or Tailscale
+ * Serve is on (it can trigger a macOS privacy prompt), so a missing endpoint
+ * then means "not checked", not "not running".
+ */
+export function missingTailscaleEndpointDescription(
+  state: Pick<DesktopServerExposureState, "mode" | "tailscaleServeEnabled"> | null,
+): string {
+  return state && state.mode !== "network-accessible" && !state.tailscaleServeEnabled
+    ? "Turn on Network access to detect Tailscale."
+    : "Start Tailscale to set up HTTPS access through MagicDNS.";
 }
 
 export function isWslSettingsRowVisible(input: {
@@ -94,23 +108,15 @@ export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null)
 }
 
 export type QrEndpointOption = {
-  /** Unique per endpoint instance (AdvertisedEndpoint.id); safe as a React key. */
   readonly id: string;
   /**
    * Stable per endpoint *type* (endpointDefaultPreferenceKey). Multiple
    * endpoints can share one, so it is only used to match the saved default.
    */
   readonly preferenceKey: string;
-  /** False for endpoints that stay copyable but must never render as a QR. */
   readonly qrShareable: boolean;
 };
 
-/**
- * Resolves which endpoint the share panel shows: the user's explicit pick,
- * else the saved default endpoint, else the first QR-shareable option (so the
- * panel never opens on a loopback QR), else the first option. A stale
- * selectedId (endpoint disappeared) falls back rather than blanking the panel.
- */
 export function selectQrEndpointOption<T extends QrEndpointOption>(
   options: ReadonlyArray<T>,
   selectedId: string | null,
