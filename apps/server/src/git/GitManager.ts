@@ -2037,12 +2037,14 @@ export const make = Effect.gen(function* () {
       filePaths?: readonly string[];
       settings: SourceControlTextGenerationSettings;
     }) {
-      const context = yield* gitCore.prepareCommitContext(input.cwd, input.filePaths);
+      const customCommit = parseCustomCommitMessage(input.commitMessage ?? "");
+      const context = yield* gitCore.prepareCommitContext(input.cwd, input.filePaths, {
+        includePatch: customCommit === null,
+      });
       if (!context) {
         return null;
       }
 
-      const customCommit = parseCustomCommitMessage(input.commitMessage ?? "");
       if (customCommit) {
         return {
           subject: customCommit.subject,
@@ -2729,7 +2731,6 @@ export const make = Effect.gen(function* () {
           // findLocalHeadBranch also accepts a branch that merely shares the head's bare name —
           // a fork PR opened from "main" matches the user's own local main. That checkout is
           // somebody else's work, so it keeps its tracking config and nothing else.
-          yield* ensureExistingWorktreeUpstream(worktreePath);
           return {
             pullRequest,
             branch: localPullRequestBranch,

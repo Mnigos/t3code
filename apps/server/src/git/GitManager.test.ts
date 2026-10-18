@@ -3804,6 +3804,13 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
+      // Patch generation would invoke this unavailable converter. A supplied
+      // message must commit without generating a patch it will not use.
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git/info/attributes"),
+        "README.md diff=probe\n",
+      );
+      yield* runGit(repoDir, ["config", "diff.probe.textconv", "t3-missing-textconv-for-test"]);
       NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\ncustom\n");
       let generatedCount = 0;
 
@@ -6865,7 +6872,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  it.effect("never moves an unrelated local branch that shares the fork head branch name", () =>
+  it.effect("preserves an unrelated local branch and upstream that share the fork head name", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
@@ -6887,6 +6894,13 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       );
       yield* runGit(repoDir, ["worktree", "add", mainWorktreePath, "main"]);
       const localMainBefore = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+      // Leave the fork tracking ref stale so an unnecessary fetch would change it.
+      yield* runGit(repoDir, ["update-ref", "refs/remotes/fork-seed/main", localMainBefore]);
+      const trackingRefsBefore = (yield* runGit(repoDir, [
+        "for-each-ref",
+        "--format=%(refname) %(objectname)",
+        "refs/remotes",
+      ])).stdout;
 
       const setupCalls: ProjectSetupScriptRunner.ProjectSetupScriptRunnerInput[] = [];
       const { manager } = yield* makeManager({
@@ -6930,8 +6944,34 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         localMainBefore,
       );
       expect(NodeFS.existsSync(NodePath.join(mainWorktreePath, "contributor.txt"))).toBe(false);
+      expect(
+        (yield* runGit(mainWorktreePath, [
+          "rev-parse",
+          "--abbrev-ref",
+          "@{upstream}",
+        ])).stdout.trim(),
+      ).toBe("origin/main");
+      expect(result.branch).toBe("t3code/pr-94/main");
+      expect(result.worktreePath && NodeFS.realpathSync.native(result.worktreePath)).toBe(
+        NodeFS.realpathSync.native(mainWorktreePath),
+      );
+      expect(
+        (yield* runGit(repoDir, [
+          "for-each-ref",
+          "--format=%(refname) %(objectname)",
+          "refs/remotes",
+        ])).stdout,
+      ).toBe(trackingRefsBefore);
+      expect((yield* runGit(mainWorktreePath, ["branch", "--show-current"])).stdout.trim()).toBe(
+        "main",
+      );
       expect(result.isOnPullRequestHead).toBe(false);
       expect(setupCalls).toHaveLength(0);
+
+      yield* (yield* GitVcsDriver.GitVcsDriver).pullCurrentBranch(mainWorktreePath);
+      expect((yield* runGit(mainWorktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+        localMainBefore,
+      );
     }),
   );
 
@@ -7075,7 +7115,14 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         "..",
         `pr-reused-fork-${NodePath.basename(repoDir)}`,
       );
-      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-reused-fork"]);
+      yield* runGit(repoDir, [
+        "worktree",
+        "add",
+        "-b",
+        "t3code/pr-83/feature/pr-reused-fork",
+        worktreePath,
+        "feature/pr-reused-fork",
+      ]);
       yield* runGit(worktreePath, ["branch", "--unset-upstream"], true);
 
       const { manager } = yield* makeManager({
@@ -7108,6 +7155,10 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
       expect(result.worktreePath && NodeFS.realpathSync.native(result.worktreePath)).toBe(
         NodeFS.realpathSync.native(worktreePath),
+      );
+      expect(result.branch).toBe("t3code/pr-83/feature/pr-reused-fork");
+      expect((yield* runGit(worktreePath, ["branch", "--show-current"])).stdout.trim()).toBe(
+        result.branch,
       );
       expect(
         (yield* runGit(worktreePath, ["rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim(),
