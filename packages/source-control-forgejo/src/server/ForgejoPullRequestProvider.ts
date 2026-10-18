@@ -227,7 +227,7 @@ export const make = Effect.gen(function* () {
       { concurrency: 2 },
     ).pipe(
       Effect.map(([statuses, branch]) => {
-        const checks = forgejoChecks(statuses.items);
+        const checks = forgejoChecks(statuses.items, pr.html_url);
         return Option.isSome(branch) ? markRequiredForgejoChecks(checks, branch.value) : checks;
       }),
     );

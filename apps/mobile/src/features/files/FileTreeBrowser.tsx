@@ -1,12 +1,12 @@
 import { LegendList } from "@legendapp/list/react-native";
 import type { ProjectEntry } from "@t3tools/contracts";
-import { AppActivityIndicator } from "../../components/AppActivityIndicator";
-import { SymbolView } from "../../components/AppSymbol";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { cn } from "../../lib/cn";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
@@ -110,6 +110,7 @@ export function FileTreeBrowser(props: {
   readonly isPending: boolean;
   readonly isRefreshing: boolean;
   readonly searchQuery: string;
+  readonly searchResultPaths: ReadonlySet<string> | null;
   readonly searchTruncated: boolean;
   readonly selectedPath: string | null;
   readonly loadingDirectories: ReadonlySet<string>;
@@ -147,9 +148,9 @@ export function FileTreeBrowser(props: {
       flattenFileTree({
         nodes: tree,
         expanded: expandedPaths,
-        searchQuery: props.searchQuery,
+        searchResultPaths: props.searchResultPaths,
       }),
-    [expandedPaths, props.searchQuery, tree],
+    [expandedPaths, props.searchResultPaths, tree],
   );
 
   useEffect(() => {
