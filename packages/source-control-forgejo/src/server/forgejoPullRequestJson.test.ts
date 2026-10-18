@@ -12,15 +12,18 @@ const status = (context: string, state: string) => ({
 
 describe("forgejoChecks", () => {
   it("maps every Forgejo status state onto a check status, and unknown ones to pending", () => {
-    const checks = forgejoChecks([
-      status("CI / checks (pull_request)", "success"),
-      status("CI / e2e (pull_request)", "failure"),
-      status("CI / lint (pull_request)", "error"),
-      status("CI / deploy (pull_request)", "skipped"),
-      status("CI / audit (pull_request)", "warning"),
-      status("CI / build (pull_request)", "pending"),
-      status("CI / docs (pull_request)", "future-state"),
-    ]);
+    const checks = forgejoChecks(
+      [
+        status("CI / checks (pull_request)", "success"),
+        status("CI / e2e (pull_request)", "failure"),
+        status("CI / lint (pull_request)", "error"),
+        status("CI / deploy (pull_request)", "skipped"),
+        status("CI / audit (pull_request)", "warning"),
+        status("CI / build (pull_request)", "pending"),
+        status("CI / docs (pull_request)", "future-state"),
+      ],
+      "https://forgejo.test/acme/web/pulls/1",
+    );
     assert.deepEqual(
       checks.map((check) => [check.name, check.status]),
       [
