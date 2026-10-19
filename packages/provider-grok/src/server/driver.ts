@@ -53,7 +53,7 @@ const GROK_NPM_PACKAGE = "@xai-official/grok";
 // `grok update` finds the installer that owns the binary itself, so the
 // resolved executable is its own updater. It installs under `GROK_HOME`, so it
 // runs with the instance's environment. The exception is a Homebrew cask
-// (`grok-build`), which brew upgrades and versions: `grok update` would install
+// (normally `grok-build`), which brew upgrades and versions: `grok update` would install
 // a second copy beside it, so a cask its brew cannot vouch for stays manual.
 const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
   resolve: Effect.fn("resolveGrokMaintenance")(function* (context) {
