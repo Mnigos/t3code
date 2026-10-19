@@ -247,7 +247,6 @@ export function QueuedRunsControl({
         <ComposerBanner.Scroll className={cn("max-h-32", !expanded && "hidden")}>
           <ComposerBanner.Children render={<ol />} id={queueListId}>
             {items.map((item) => {
-              // Display only; editing sends the original `item.text` so citation links survive.
               const previewText = assistantCitationsToPlainText(
                 replaceComposerContextReferences(item.text, (reference) =>
                   reference.kind === "image" && item.thumbnails.length > 0 ? "" : reference.label,

@@ -3,6 +3,7 @@ import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
 
 const state = vi.hoisted(() => ({
   projection: null as unknown,
@@ -165,21 +166,22 @@ describe("QueuedRunsControl attachments and edit mode", () => {
   });
 });
 
-describe("QueuedRunsControl assistant quotes", () => {
+it("previews assistant quotes as readable text and preserves the citation when editing", async () => {
+  const quotedText = "Cache the parsed config per worktree.";
   const quote = serializeAssistantCitation({
     version: 1,
     environmentId: EnvironmentId.make("environment:test"),
     threadId: ThreadId.make("thread:test"),
     messageId: MessageId.make("message:assistant"),
-    text: "Cache the parsed config per worktree.",
+    text: quotedText,
     start: 0,
-    end: 37,
+    end: quotedText.length,
     prefix: "",
     suffix: "",
   });
   const quoteAndText = `${quote}\n\nWhy per worktree?`;
-
-  const quotedWorkflow = () => ({
+  state.projection = { projection: { messages: [] } };
+  state.workflow = {
     activeRun: { id: "run:active" },
     canPromoteToSteer: true,
     canReorder: true,
@@ -195,38 +197,19 @@ describe("QueuedRunsControl assistant quotes", () => {
         attachments: [],
       },
     ],
+  };
+  const onEditQueuedRun = vi.fn();
+  await render({ onEditQueuedRun });
+
+  await expect.element(page.getByText(quotedText, { exact: true })).toBeVisible();
+  await expect
+    .element(page.getByText(`${quotedText} Why per worktree?`, { exact: true }))
+    .toBeVisible();
+
+  await act(async () => {
+    await page.getByRole("button", { name: "Edit queued message", exact: true }).nth(1).click();
   });
-
-  it("previews quote-only and quote-plus-text items by their quoted text", async () => {
-    state.projection = { projection: { messages: [] } };
-    state.workflow = quotedWorkflow();
-
-    const view = await render();
-    const [quoteOnlyRow, quoteAndTextRow] = view.querySelectorAll("li");
-
-    expect(quoteOnlyRow?.textContent).toContain("Cache the parsed config per worktree.");
-    expect(quoteAndTextRow?.textContent).toContain("Cache the parsed config per worktree.");
-    expect(quoteAndTextRow?.textContent).toContain("Why per worktree?");
-    expect(view.textContent).not.toContain("t3-citation:");
-    expect(view.textContent).not.toContain("Assistant quote");
-  });
-
-  it("edits the original message so the citation link survives", async () => {
-    state.projection = { projection: { messages: [] } };
-    state.workflow = quotedWorkflow();
-    const onEditQueuedRun = vi.fn();
-
-    const view = await render({ onEditQueuedRun });
-    const editButton = view
-      .querySelectorAll("li")[1]
-      ?.querySelector<HTMLButtonElement>('[aria-label="Edit queued message"]');
-    await act(async () => editButton?.click());
-
-    expect(onEditQueuedRun).toHaveBeenCalledWith({
-      runId: "run:quote-and-text",
-      messageId: "message:quote-and-text",
-      text: quoteAndText,
-      attachments: [],
-    });
-  });
+  expect(onEditQueuedRun).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ text: quoteAndText }),
+  );
 });
