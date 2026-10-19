@@ -50,11 +50,11 @@ const DRIVER_KIND = ProviderDriverKind.make("grok");
 // npm's `latest` tracks Grok's stable channel, the one `grok update` installs
 // by default, so the registry stays the source for "latest".
 const GROK_NPM_PACKAGE = "@xai-official/grok";
-// A Homebrew cask (`grok-build`) is upgraded and versioned through brew, since
-// `grok update` would install a second copy beside it. Otherwise `grok update`
-// finds the installer that owns the binary itself, so the resolved executable
-// is its own updater. It installs under `GROK_HOME`, so it runs with the
-// instance's environment.
+// `grok update` finds the installer that owns the binary itself, so the
+// resolved executable is its own updater. It installs under `GROK_HOME`, so it
+// runs with the instance's environment. The exception is a Homebrew cask
+// (`grok-build`), which brew upgrades and versions: `grok update` would install
+// a second copy beside it, so a cask its brew cannot vouch for stays manual.
 const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
   resolve: Effect.fn("resolveGrokMaintenance")(function* (context) {
     if (!context) {
@@ -63,19 +63,19 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
         packageName: GROK_NPM_PACKAGE,
       });
     }
-    // Grok ships through Homebrew only as a cask; a formula keg such as `node`
-    // holding an npm global is not Grok's owner. A cask the found `brew` cannot
-    // verify (none found, or another prefix) is still Homebrew's, so it stays
-    // manual rather than letting `grok update` install a second copy.
-    if (homebrewOwnershipFromCommandPath(context.realCommandPath)?.kind === "cask") {
+    const homebrew = homebrewOwnershipFromCommandPath(context.realCommandPath);
+    // Only a cask is Grok's: a formula keg such as `node` holding an npm global is not.
+    if (homebrew?.kind === "cask") {
       return (
         (yield* resolveHomebrewProviderMaintenance(
           { provider: DRIVER_KIND, packageName: GROK_NPM_PACKAGE },
+          homebrew,
           context,
         )) ??
         makeManualOnlyProviderMaintenanceCapabilities({
           provider: DRIVER_KIND,
           packageName: GROK_NPM_PACKAGE,
+          installPath: context.realCommandPath,
         })
       );
     }

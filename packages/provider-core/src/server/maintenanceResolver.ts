@@ -485,41 +485,39 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
     });
   }
 
+  const homebrew = homebrewOwnershipFromCommandPath(context.realCommandPath);
   if (
     commandPaths.some(isMiseCommandPath) ||
-    isMiseKeg(homebrewOwnershipFromCommandPath(context.realCommandPath)) ||
+    // Mise shims resolve to the version manager's keg, not the provider's.
+    (homebrew?.kind === "formula" && homebrew.name.toLowerCase() === "mise") ||
     (yield* isMiseWrapperScript(context))
   ) {
     return manual;
   }
+  if (homebrew) {
+    return (
+      (yield* resolveHomebrewProviderMaintenance(
+        { provider: definition.provider, packageName },
+        homebrew,
+        context,
+      )) ?? fallback
+    );
+  }
 
-  return (
-    (yield* resolveHomebrewProviderMaintenance(
-      { provider: definition.provider, packageName },
-      context,
-    )) ?? fallback
-  );
+  return fallback;
 });
 
-/** Mise shims resolve to the version manager's keg, not the provider's. */
-function isMiseKeg(homebrew: HomebrewOwnership | null): boolean {
-  return homebrew?.kind === "formula" && homebrew.name.toLowerCase() === "mise";
-}
-
 /**
- * `brew upgrade` capabilities when Homebrew provably owns the executable, with
- * `latestVersion` from `brew info`. Null when the path is not a keg or cask,
- * no `brew` is found, or the keg is not under that brew's prefix.
+ * `brew upgrade` capabilities once the keg's prefix is confirmed by a `brew`
+ * that reports it as its own, with `latestVersion` from `brew info`. Null when
+ * no `brew` is found or it owns another prefix.
  */
 export const resolveHomebrewProviderMaintenance = Effect.fn("resolveHomebrewProviderMaintenance")(
   function* (
     input: { readonly provider: ProviderDriverKind; readonly packageName: string | null },
+    homebrew: HomebrewOwnership,
     context: ProviderMaintenanceResolutionContext,
   ) {
-    const homebrew = homebrewOwnershipFromCommandPath(context.realCommandPath);
-    if (!homebrew || isMiseKeg(homebrew)) {
-      return null;
-    }
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     // The keg's own brew works even when a GUI-launched server has no
