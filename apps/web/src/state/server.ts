@@ -20,27 +20,29 @@ import { createOutdatedServerUpdateCommand } from "@t3tools/client-runtime/state
 import { createEnvironmentServerConfigsAtom } from "@t3tools/client-runtime/state/shell";
 import { mergeWithDefaultKeybindings } from "@t3tools/shared/keybindings";
 import * as Option from "effect/Option";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import { isConnectedWithConfig } from "../components/settings/scopedSettings";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { environmentAtomList } from "./environmentAtomList";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { environmentSession } from "./session";
+import { reuseProvidersIgnoringCheckedAt } from "./serverProviders.logic";
 
-// Opted in for every environment, not just the primary one. Only the primary
-// environment's themes are rendered, but which environment is primary changes
-// at runtime and the subscription payload is fixed when it is established --
-// gating on "primary right now" would leave a newly promoted environment with
-// no themes until it reconnected. The set is capped server-side and stripped
-// before caching, so following all of them costs a few KB per environment.
+// Only the primary environment's themes are rendered, but which environment is primary changes
+// at runtime and the subscription payload is fixed when it is established -- gating on "primary
+// right now" would leave a newly promoted environment with no themes until it reconnected.
 export const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRuntime, {
   initialConfigValueAtom: environmentSession.initialConfigValueAtom,
   environmentThemes: true,
   usageLimitSources: true,
   usageLimitsCommand: true,
 });
-/** Updates a host whose protocol is too old for this client to connect to. */
+export const environmentUpdateStatesAtom = environmentAtomList(
+  "web-environment-update-states",
+  serverEnvironment.updateStateAtom,
+);
 export const updateOutdatedServer = createOutdatedServerUpdateCommand(connectionAtomRuntime);
 export const environmentServerConfigsAtom = createEnvironmentServerConfigsAtom({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
@@ -174,12 +176,17 @@ export const primaryServerAvailableEditorsAtom = Atom.make(
 
 const EMPTY_ENVIRONMENT_THEMES: ReadonlyArray<EnvironmentTheme> = [];
 
-/**
- * Palettes published by the primary environment's machine. Only the primary
- * environment: a client follows the machine it is anchored to, not every
- * environment it happens to be connected to.
- */
 export const primaryServerEnvironmentThemesAtom = Atom.make(
   (get): ReadonlyArray<EnvironmentTheme> =>
     get(primaryServerConfigAtom)?.environmentThemes ?? EMPTY_ENVIRONMENT_THEMES,
 ).pipe(Atom.withLabel("web-primary-server-environment-themes"));
+
+/** Providers for views that do not show `checkedAt`; see {@link reuseProvidersIgnoringCheckedAt}. */
+export const providersIgnoringCheckedAtAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get): ReadonlyArray<ServerProvider> =>
+    reuseProvidersIgnoringCheckedAt(
+      Option.getOrNull(get.self<ReadonlyArray<ServerProvider>>()),
+      get(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS,
+    ),
+  ).pipe(Atom.withLabel(`web-providers-ignoring-checked-at:${environmentId}`)),
+);
