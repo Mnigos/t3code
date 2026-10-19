@@ -26,26 +26,22 @@ export function resolveSelectionActionPosition(options: {
   };
 }
 
-type SelectionRect = { left: number; top: number; right: number; bottom: number; width: number };
+type SelectionRect = { left: number; top: number; right: number; bottom: number };
 
-/** Whether a selection still shows inside every box that clips it. */
 export function isSelectionRectVisible(rect: SelectionRect, clips: readonly SelectionRect[]) {
-  return (
-    rect.width > 0 &&
-    clips.every(
-      (clip) =>
-        rect.right > clip.left &&
-        rect.left < clip.right &&
-        rect.bottom > clip.top &&
-        rect.top < clip.bottom,
-    )
-  );
+  let { left, top, right, bottom } = rect;
+  for (const clip of clips) {
+    left = Math.max(left, clip.left);
+    top = Math.max(top, clip.top);
+    right = Math.min(right, clip.right);
+    bottom = Math.min(bottom, clip.bottom);
+  }
+  return right > left && bottom > top;
 }
 
 /**
  * Interactive popovers pass getActionElement to keep editing their fields from replacing the
- * captured source selection. Surfaces that can reposition their actions pass
- * restoreAfterScroll to re-read the selection once scrolling settles.
+ * captured source selection.
  */
 export function observeSelectionActions({
   element,
@@ -65,6 +61,7 @@ export function observeSelectionActions({
   let pointerDown = false;
   let gestureActive = false;
   let dismissed = false;
+  let restorable = false;
   let pointer: SelectionActionPoint | null = null;
   let timer: number | null = null;
   let frame: number | null = null;
@@ -82,6 +79,7 @@ export function observeSelectionActions({
     pointerDown = gestureActive = false;
     pointer = null;
     dismissed = true;
+    restorable = false;
   };
   const dismiss = () => {
     cancel();
@@ -92,6 +90,7 @@ export function observeSelectionActions({
     onDismiss("interaction");
   };
   const schedule = (delay: number) => {
+    restorable = true;
     cancelPending();
     timer = view.setTimeout(() => {
       timer = null;
@@ -112,6 +111,7 @@ export function observeSelectionActions({
     const inside = element.contains(event.target as Node);
     gestureActive = false;
     dismissed = true;
+    restorable = false;
     pointer = null;
     if (inside) onDismiss("interaction");
     else if (getActionElement?.()) onDismiss("cancel");
@@ -155,7 +155,7 @@ export function observeSelectionActions({
     // Autoscroll during a drag must not cancel that gesture's eventual release.
     if (!pointerDown) {
       pointer = null;
-      if (restoreAfterScroll && !dismissed) schedule(SELECTION_SCROLL_SETTLE_MS);
+      if (restoreAfterScroll && !dismissed && restorable) schedule(SELECTION_SCROLL_SETTLE_MS);
       else dismissed = true;
     }
     onDismiss("cancel");
