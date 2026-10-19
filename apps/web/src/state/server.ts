@@ -115,11 +115,7 @@ export const primaryServerProvidersAtom = Atom.make(
     get(primaryServerConfigAtom)?.providers ?? EMPTY_SERVER_PROVIDERS,
 ).pipe(Atom.withLabel("web-primary-server-providers"));
 
-/**
- * Shortcut bindings. Without a primary environment (Local environment off, the
- * hosted app) they follow the environment unscoped Settings shows and edits. A
- * primary whose config is still loading keeps the defaults.
- */
+/** Without a primary, global shortcuts follow unscoped Settings. */
 export function createShortcutKeybindingsAtom(input: {
   readonly primaryEnvironmentIdAtom: Atom.Atom<EnvironmentId | null>;
   readonly primaryConfigAtom: Atom.Atom<ServerConfig | null>;
@@ -130,6 +126,7 @@ export function createShortcutKeybindingsAtom(input: {
   // Selected before merging, so unrelated config updates keep the merged array.
   const customAtom = Atom.make((get) => {
     if (get(input.primaryEnvironmentIdAtom) !== null) {
+      // A primary stays authoritative while its config loads.
       return get(input.primaryConfigAtom)?.keybindings ?? null;
     }
     const environments = [...get(input.environmentsAtom).values()];
@@ -140,8 +137,8 @@ export function createShortcutKeybindingsAtom(input: {
   );
 }
 
-// Each environment's connection and config in catalog order, presented as
-// ./presentation does for Settings; that module imports this one.
+// Settings' presentations import this module; mirror their catalog order and
+// connection presentation here to avoid a cycle.
 const environmentConnectionsAtom = Atom.make((get) => {
   const environments = new Map<
     EnvironmentId,

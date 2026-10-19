@@ -1,7 +1,7 @@
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import { EnvironmentId, type KeybindingRule, type ServerConfig } from "@t3tools/contracts";
 import { compileResolvedKeybindingsConfig } from "@t3tools/shared/keybindings";
-import { Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { resolveShortcutCommand } from "../keybindings";
@@ -53,7 +53,6 @@ function makeHarness(input: {
     primaryConfigAtom,
     environmentsAtom,
     keybindings: () => registry.get(keybindingsAtom),
-    /** The command Cmd+N runs on macOS. */
     cmdN: () =>
       resolveShortcutCommand(
         { key: "n", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false },
@@ -69,109 +68,90 @@ afterEach(() => {
 });
 
 describe("createShortcutKeybindingsAtom", () => {
-  it("follows the primary environment when it has a config", () => {
-    const harness = makeHarness({ primaryEnvironmentId: PRIMARY, primaryConfig: config(SWAPPED) });
-    expect(harness.cmdN()).toBe("chat.newLocal");
-  });
-
-  it("keeps the defaults while the primary config is loading", () => {
-    const harness = makeHarness({
-      primaryEnvironmentId: PRIMARY,
-      environments: [[B, environment("connected", config(SWAPPED))]],
-    });
-    expect(harness.cmdN()).toBe("chat.new");
-  });
-
-  it("follows the connected environment without a primary", () => {
-    const harness = makeHarness({ environments: [[B, environment("connected", config(SWAPPED))]] });
-    expect(harness.cmdN()).toBe("chat.newLocal");
-  });
-
-  it("skips an offline environment's cached config, as Settings does", () => {
-    const harness = makeHarness({
-      environments: [
-        [A, environment("offline", config(STALE))],
-        [B, environment("connected", config(SWAPPED))],
-      ],
-    });
-    expect(harness.cmdN()).toBe("chat.newLocal");
-  });
-
-  it("keeps the defaults when no environment is connected", () => {
-    const harness = makeHarness({
-      environments: [[A, environment("offline", config(STALE))]],
-    });
-    expect(harness.cmdN()).toBe("chat.new");
-  });
-
-  it("follows edits to the connected environment's keybindings", () => {
-    const harness = makeHarness({ environments: [[B, environment("connected", config([]))]] });
-    expect(harness.cmdN()).toBe("chat.new");
-
-    harness.registry.set(
-      harness.environmentsAtom,
-      new Map([[B, environment("connected", config(SWAPPED))]]),
-    );
-    expect(harness.cmdN()).toBe("chat.newLocal");
-  });
-
-  it("keeps the same bindings when an unrelated config update arrives", () => {
-    const remote = config(SWAPPED);
-    const harness = makeHarness({
-      environments: [
-        [A, environment("offline", config([]))],
-        [B, environment("connected", remote)],
-      ],
-    });
-    const before = harness.keybindings();
-
-    // A provider status update on B and a reconnect attempt on A.
-    harness.registry.set(
-      harness.environmentsAtom,
-      new Map([
-        [A, environment("reconnecting", config([]))],
-        [B, environment("connected", { ...remote, providers: [] })],
-      ]),
-    );
-    expect(harness.keybindings()).toBe(before);
-  });
-
-  it("follows connection and primary changes without a reload", () => {
+  it("updates shortcuts from the first connected, configured environment without a primary", () => {
+    const harness = makeHarness({});
     const aConfig = config(STALE);
     const bConfig = config(SWAPPED);
-    const harness = makeHarness({
-      environments: [
-        [A, environment("connected", aConfig)],
-        [B, environment("connected", bConfig)],
+    const edited = config([{ key: "mod+n", command: "sidebar.toggle" }]);
+    expect(harness.cmdN()).toBe("chat.new");
+
+    // One mounted consumer follows config loading, edits, disconnects and reconnects.
+    for (const [a, b, command] of [
+      [environment("offline", aConfig), environment("connected", bConfig), "chat.newLocal"],
+      [environment("connected", null), environment("connected", bConfig), "chat.newLocal"],
+      [
+        environment("connected", aConfig),
+        environment("connected", bConfig),
+        "chat.newWithoutProject",
       ],
-    });
-    const setEnvironments = (a: EnvironmentConnectionPhase, b: EnvironmentConnectionPhase) =>
+      [environment("connected", edited), environment("connected", bConfig), "sidebar.toggle"],
+      [environment("offline", edited), environment("connected", bConfig), "chat.newLocal"],
+      [environment("offline", edited), environment("offline", bConfig), "chat.new"],
+      [environment("reconnecting", edited), environment("offline", bConfig), "chat.new"],
+      [
+        environment("connected", aConfig),
+        environment("offline", bConfig),
+        "chat.newWithoutProject",
+      ],
+    ] as const) {
       harness.registry.set(
         harness.environmentsAtom,
         new Map([
-          [A, environment(a, aConfig)],
-          [B, environment(b, bConfig)],
+          [A, a],
+          [B, b],
         ]),
       );
+      expect(harness.cmdN()).toBe(command);
+    }
+  });
 
-    // Both connected: the first in catalog order wins.
-    expect(harness.cmdN()).toBe("chat.newWithoutProject");
-
-    setEnvironments("offline", "connected");
+  it("uses the primary config or defaults until the primary is removed", () => {
+    const harness = makeHarness({
+      environments: [[B, environment("connected", config(SWAPPED))]],
+    });
     expect(harness.cmdN()).toBe("chat.newLocal");
 
-    setEnvironments("offline", "offline");
-    expect(harness.cmdN()).toBe("chat.new");
-
-    // A primary appears while its config is loading; B is back but must not leak in.
-    setEnvironments("offline", "connected");
     harness.registry.set(harness.primaryEnvironmentIdAtom, PRIMARY);
     expect(harness.cmdN()).toBe("chat.new");
 
-    harness.registry.set(
-      harness.primaryConfigAtom,
-      config([{ key: "mod+n", command: "sidebar.toggle" }]),
-    );
-    expect(harness.cmdN()).toBe("sidebar.toggle");
+    harness.registry.set(harness.primaryConfigAtom, config(STALE));
+    expect(harness.cmdN()).toBe("chat.newWithoutProject");
+
+    harness.registry.set(harness.primaryConfigAtom, null);
+    expect(harness.cmdN()).toBe("chat.new");
+
+    harness.registry.set(harness.primaryEnvironmentIdAtom, null);
+    expect(harness.cmdN()).toBe("chat.newLocal");
   });
+
+  it.each([false, true])(
+    "preserves the bindings array through unrelated updates (primary: %s)",
+    (hasPrimary) => {
+      const selected = config(SWAPPED);
+      const harness = makeHarness({
+        primaryEnvironmentId: hasPrimary ? PRIMARY : null,
+        primaryConfig: hasPrimary ? selected : null,
+        environments: [
+          [A, environment("connected", selected)],
+          [B, environment("connected", config(STALE))],
+        ],
+      });
+      expect(harness.cmdN()).toBe("chat.newLocal");
+      const before = harness.keybindings();
+
+      harness.registry.set(
+        harness.environmentsAtom,
+        new Map([
+          [A, environment("connected", { ...selected, providers: [] })],
+          [B, environment("connected", config([]))],
+        ]),
+      );
+      expect(harness.keybindings()).toBe(before);
+
+      if (hasPrimary) {
+        harness.registry.set(harness.primaryConfigAtom, { ...selected, providers: [] });
+        expect(harness.keybindings()).toBe(before);
+      }
+    },
+  );
 });

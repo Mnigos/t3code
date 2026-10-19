@@ -49,7 +49,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Settings reads and writes these; without a primary, shortcuts follow the first one. */
 export function isConnectedWithConfig(
   environment: Pick<ScopedSettingsEnvironment, "connection" | "serverConfig">,
 ) {
