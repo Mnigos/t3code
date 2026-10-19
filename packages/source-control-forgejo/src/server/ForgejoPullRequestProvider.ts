@@ -1,7 +1,6 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -36,6 +35,8 @@ import {
 } from "./forgejoPullRequestJson.ts";
 import { ForgejoBranchStatusChecks, markRequiredForgejoChecks } from "./forgejoRequiredChecks.ts";
 import { definition } from "../client/definition.ts";
+
+const isForgejoCliError = Schema.is(ForgejoCli.ForgejoCliError);
 
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
@@ -204,10 +205,30 @@ export const make = Effect.gen(function* () {
     );
     return permissions(repo, pr, viewer);
   });
-  // Statuses on the head commit, with the ones the base branch requires marked. When the branch
-  // cannot be read (older server, missing access), no check is marked and every check gates.
-  const readChecks = (input: ProviderRepositoryRef, pr: typeof ForgejoPullRequest.Type) =>
-    Effect.all(
+  const readChecks = Effect.fn("ForgejoPullRequestProvider.readChecks")(function* (
+    input: ProviderRepositoryRef,
+    pr: typeof ForgejoPullRequest.Type,
+  ) {
+    const branch = read(
+      {
+        ...input,
+        path: `${repoPath(input)}/branches/${pr.base.ref.split("/").map(encodeURIComponent).join("/")}`,
+      },
+      ForgejoBranchStatusChecks,
+    ).pipe(
+      Effect.catchTags({
+        PullRequestProviderError: (error) => {
+          if (
+            isForgejoCliError(error.cause) &&
+            (error.cause.reason === "forbidden" || error.cause.reason === "not-found")
+          ) {
+            return Effect.succeed({});
+          }
+          return Effect.fail(error);
+        },
+      }),
+    );
+    const [statuses, policy] = yield* Effect.all(
       [
         page(
           {
@@ -216,21 +237,12 @@ export const make = Effect.gen(function* () {
           },
           ForgejoStatus,
         ),
-        read(
-          {
-            ...input,
-            path: `${repoPath(input)}/branches/${pr.base.ref.split("/").map(encodeURIComponent).join("/")}`,
-          },
-          ForgejoBranchStatusChecks,
-        ).pipe(Effect.option),
+        branch,
       ],
       { concurrency: 2 },
-    ).pipe(
-      Effect.map(([statuses, branch]) => {
-        const checks = forgejoChecks(statuses.items, pr.html_url);
-        return Option.isSome(branch) ? markRequiredForgejoChecks(checks, branch.value) : checks;
-      }),
     );
+    return markRequiredForgejoChecks(forgejoChecks(statuses.items, pr.html_url), policy);
+  });
   const unsupported = (operation: string) =>
     Effect.fail(failure(operation, `Forgejo does not expose ${operation} through its API.`));
   const provider: PullRequestProviderApi = {
