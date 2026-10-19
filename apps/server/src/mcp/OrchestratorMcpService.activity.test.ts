@@ -28,7 +28,7 @@ import { OrchestratorDispatchError } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
-import { liveThreadShell } from "./McpToolAccess.testkit.ts";
+import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
@@ -687,99 +687,48 @@ it("sendToThread reports why the orchestrator refused the message", async () => 
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
-it("readThread names the thread that sent a message with t3_thread_send", async () => {
-  const userMessageRow = (position: number, messageId: string, text: string) => ({
-    position,
-    visibility: "local",
-    sourceThreadId: parentThreadId,
-    sourceItemId: `item-${messageId}`,
-    item: {
-      id: `item-${messageId}`,
-      type: "user_message",
-      messageId,
-      runId: activeRunId,
-      status: "completed",
-      title: null,
-      text,
-      createdAt: now,
-      updatedAt: now,
-    },
-  });
-  const visibleTurnItems = [
-    userMessageRow(0, "message-from-child", "Child reporting in"),
-    userMessageRow(1, "message-from-user", "Thanks"),
+it("readThread exposes the stored sender thread only for thread-sent messages", async () => {
+  const shell = liveThreadShell(parentThreadId);
+  const messages = [
+    { id: "message-from-child", text: "Child reporting in", senderThreadId: childThreadId },
+    { id: "message-from-user", text: "Thanks" },
   ];
   const projection = {
-    thread: baseThread({
-      threadId: parentThreadId,
-      title: "Parent",
-      instanceId: parentInstanceId,
-      model: "gpt-5.4",
-    }),
-    runs: [makeRun({ id: activeRunId, ordinal: 1, status: "running" })],
-    visibleTurnItems,
-    runtimeRequests: [],
-    messages: [
-      {
-        id: "message-from-child",
-        threadId: parentThreadId,
-        role: "user",
-        text: "Child reporting in",
-        createdBy: "agent",
-        creationSource: "mcp",
-        senderThreadId: childThreadId,
+    ...idleThreadProjection(shell),
+    messages,
+    visibleTurnItems: messages.map((message, position) => ({
+      position,
+      visibility: "local",
+      sourceThreadId: parentThreadId,
+      sourceItemId: `item-${message.id}`,
+      item: {
+        id: `item-${message.id}`,
+        type: "user_message",
+        messageId: message.id,
+        runId: activeRunId,
+        status: "completed",
+        title: null,
+        text: message.text,
+        updatedAt: now,
       },
-      {
-        id: "message-from-user",
-        threadId: parentThreadId,
-        role: "user",
-        text: "Thanks",
-        createdBy: "user",
-        creationSource: "web",
-      },
-    ],
-    contextTransfers: [],
-    subagents: [],
-    updatedAt: now,
+    })),
   } as unknown as OrchestrationV2ThreadProjection;
-
   const layer = layerOrchestratorService.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: () => Effect.succeed(shell),
+          getThreadRecords: () => Effect.succeed(projection),
+          getProjectThreadRecords: () => Effect.succeed(projection),
           getTimelinePage: () =>
-            Effect.succeed({
-              items: visibleTurnItems,
-              totalItems: visibleTurnItems.length,
-              hasMore: false,
-            } as never),
-          getThreadRecords: (threadId) =>
-            threadId === parentThreadId
-              ? Effect.succeed(projection)
-              : Effect.die(`unexpected thread ${threadId}`),
-          getThreadShell: (threadId) =>
-            Effect.succeed(
-              threadId === parentThreadId
-                ? (projection.thread as unknown as OrchestrationV2ThreadShell)
-                : null,
-            ),
-          getProjectThreadRecords: (input) =>
-            input.threadId === parentThreadId
-              ? Effect.succeed(projection)
-              : Effect.die(`unexpected thread ${input.threadId}`),
-        } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
+            Effect.succeed({ items: projection.visibleTurnItems, totalItems: 2, hasMore: false }),
+        }),
         ServerSettings.layerTest(),
-        Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed([]),
-        } satisfies Partial<ProviderRegistry.ProviderRegistry["Service"]>),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
         Layer.mock(ProjectService.ProjectService)({}),
         Layer.mock(SecretRequests.SecretRequests)({}),
-        Layer.mock(ScheduledTaskService.ScheduledTaskService)({
-          list: () => Effect.succeed({ tasks: [] }),
-        } satisfies Partial<ScheduledTaskService.ScheduledTaskService["Service"]>),
-        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
-          list: () => Effect.succeed([]),
-        } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
         NodeCrypto.layer,
       ),
     ),
@@ -788,11 +737,10 @@ it("readThread names the thread that sent a message with t3_thread_send", async 
   await Effect.gen(function* () {
     const service = yield* OrchestratorMcpService.OrchestratorMcpService;
     const result = yield* service.readThread(makeScope(), { threadId: parentThreadId });
-    const [fromChild, fromUser] = result.items;
-    expect(fromChild?.messageId).toBe("message-from-child");
-    expect(fromChild?.senderThreadId).toBe(childThreadId);
-    expect(fromUser?.messageId).toBe("message-from-user");
-    // Messages without a sending thread omit the field rather than returning null.
-    expect(fromUser).not.toHaveProperty("senderThreadId");
+    expect(result.items).toMatchObject([
+      { messageId: "message-from-child", senderThreadId: childThreadId },
+      { messageId: "message-from-user" },
+    ]);
+    expect(result.items[1]).not.toHaveProperty("senderThreadId");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
