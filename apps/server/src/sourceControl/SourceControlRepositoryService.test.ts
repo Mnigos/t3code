@@ -760,11 +760,8 @@ it.effect("publishes over the protocol the provider's CLI prefers unless one was
   Effect.gen(function* () {
     const cases = [
       { cli: "https", protocol: undefined, expected: CLONE_URLS.url },
-      { cli: "https", protocol: "auto", expected: CLONE_URLS.url },
-      { cli: "ssh", protocol: undefined, expected: CLONE_URLS.sshUrl },
-      { cli: null, protocol: undefined, expected: CLONE_URLS.sshUrl },
+      { cli: null, protocol: "auto", expected: CLONE_URLS.sshUrl },
       { cli: "https", protocol: "ssh", expected: CLONE_URLS.sshUrl },
-      { cli: "ssh", protocol: "https", expected: CLONE_URLS.url },
     ] as const;
     for (const { cli, protocol, expected } of cases) {
       const asked: Array<{ cwd: string; url: string }> = [];

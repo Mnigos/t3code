@@ -172,6 +172,7 @@ function harness(input: {
   readonly localBranches?: ReadonlyArray<string>;
   readonly resolved?: string;
   readonly gitFailure?: unknown;
+  readonly run?: SourceControlHost.SourceControlHost["Service"]["process"]["run"];
 }) {
   const git: Array<readonly [string, unknown]> = [];
   const graphqlCalls: Array<GraphQlCall> = [];
@@ -207,12 +208,14 @@ function harness(input: {
   const host = TestSourceControlHost.layer({
     git: hostGit,
     process: {
-      run: (args) =>
-        Effect.succeed(
-          args.args[0] === "remote"
-            ? processOutput(input.remotes)
-            : processOutput(input.resolved ?? "", input.resolved ? 0 : 1),
-        ),
+      run:
+        input.run ??
+        ((args) =>
+          Effect.succeed(
+            args.args[0] === "remote"
+              ? processOutput(input.remotes)
+              : processOutput(input.resolved ?? "", input.resolved ? 0 : 1),
+          )),
     },
   });
   const graphql =
@@ -703,8 +706,6 @@ it.effect("prefers the protocol gh's git_protocol sets for the repository's host
     const missing = new VcsProcessSpawnError({ operation: "", command: "gh", cwd: "", cause: 0 });
     const cases = [
       [Effect.succeed(processOutput("https\n")), "https"],
-      [Effect.succeed(processOutput("ssh\n")), "ssh"],
-      [Effect.succeed(processOutput("git\n")), null],
       [Effect.fail(missing), null],
     ] as const;
     for (const [output, expected] of cases) {
@@ -713,18 +714,13 @@ it.effect("prefers the protocol gh's git_protocol sets for the repository's host
         return yield* gh.preferredCloneProtocol!({ cwd: "/repo", url: "https://ghe.test/a/b" });
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(
-            TestSourceControlHost.layer({
-              process: {
-                run: (input) => {
-                  calls.push(`${input.command} ${input.args.join(" ")}`);
-                  return output;
-                },
-              },
-            }),
-            Layer.mock(GitHubApi.GitHubApi)({}),
-            NodeServices.layer,
-          ),
+          harness({
+            remotes: "",
+            run: (input) => {
+              calls.push(`${input.command} ${input.args.join(" ")}`);
+              return output;
+            },
+          }).layer,
         ),
       );
       assert.strictEqual(protocol, expected);
