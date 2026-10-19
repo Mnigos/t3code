@@ -1012,8 +1012,6 @@ export const layer = Layer.effect(
                 return { token, secret, secretChanged };
               })
             : { token: null, secret: null, secretChanged: true };
-        // Scratch has no Git repository to make a worktree in; its runs start
-        // at the root, which gives each run a folder of its own.
         const workspaceStrategy: ScheduledTask["workspaceStrategy"] =
           input.workspaceStrategy.type === "worktree" &&
           (yield* managedFolders.isScratchProject(input.projectId))

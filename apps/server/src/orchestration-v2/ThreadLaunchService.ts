@@ -820,9 +820,8 @@ const make = Effect.gen(function* () {
 
   const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
     function* (request) {
-      // Scratch is a plain folder, not a Git repository, so a worktree there
-      // can only fail. It launches at the root instead, which gives the thread
-      // a folder of its own below, and its retries prepare that folder too.
+      // Scratch has no Git repository. Normalize before folder allocation so
+      // durable preparation and retries use the thread's own Scratch folder.
       const input: ThreadLaunchInput =
         request.workspaceStrategy.type === "worktree" &&
         (yield* managedFolders.isScratchProject(request.projectId))
