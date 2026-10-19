@@ -1554,7 +1554,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
-    it.effect("lists top-level Codex sessions but not the subagents they spawned", () =>
+    it.effect("excludes Codex subagents from discovery and the recent-thread budget", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
@@ -1562,25 +1562,21 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
         const codexHomePath = yield* makeTempDir("t3code-codex-home-");
         const workspace = yield* makeTempDir("t3code-workspace-");
-        const sessions = [
-          ["parent", "vscode"],
-          ["no-source", undefined],
-          ["null-source", null],
-          ["object-source", { custom: "launcher" }],
-          [
-            "spawned",
-            {
-              subagent: {
-                thread_spawn: { parent_thread_id: "parent", depth: 1, agent_path: "/root/worker" },
-              },
-            },
-          ],
-          ["review", { subagent: "review" }],
-          ["guardian", { subagent: { other: "guardian" } }],
-          ["compact", { subAgent: "compact" }],
-        ] as const;
-
-        for (const [index, [id, source]] of sessions.entries()) {
+        const subagentSources = [
+          { subagent: { thread_spawn: { parent_thread_id: "session-100", depth: 1 } } },
+          { subagent: "review" },
+          { subagent: { other: "guardian" } },
+          { subAgent: "compact" },
+        ];
+        // Newer subagents would exhaust the 100-transcript import budget before any parent.
+        const sources = [
+          ...Array.from({ length: 100 }, (_, index) => subagentSources[index % 4]),
+          "vscode",
+          undefined,
+          null,
+          { custom: "launcher" },
+        ];
+        for (const [index, source] of sources.entries()) {
           yield* writeTranscript({
             filePath: path.join(
               codexHomePath,
@@ -1588,38 +1584,34 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
               "2026",
               "08",
               "24",
-              `rollout-${id}.jsonl`,
+              `rollout-${index}.jsonl`,
             ),
             contents: [
-              encodeTranscriptRecord({
-                type: "session_meta",
-                payload: { id, cwd: workspace, ...(source === undefined ? {} : { source }) },
-              }),
-              // Codex repeats the cwd on every turn, so the skip must not fall through to it.
-              encodeTranscriptRecord({ type: "turn_context", payload: { cwd: workspace } }),
-              encodeTranscriptRecord({
+              { type: "session_meta", payload: { id: `session-${index}`, cwd: workspace, source } },
+              // A later cwd must not make an excluded rollout eligible again.
+              { type: "turn_context", payload: { cwd: workspace } },
+              {
                 type: "event_msg",
-                payload: { type: "user_message", message: `Prompt for ${id}` },
-              }),
-            ].join("\n"),
-            mtimeMs: nowMs - (index + 1) * 60_000,
+                payload: { type: "user_message", message: "Import this prompt" },
+              },
+            ]
+              .map((record) => encodeTranscriptRecord(record))
+              .join("\n"),
+            mtimeMs: nowMs - index * 60_000,
           });
         }
 
-        // One scanner instance, so the import reuses the candidates cached by the scan.
-        const { scan, outcomes } = yield* Effect.gen(function* () {
+        yield* Effect.gen(function* () {
           const scanner = yield* AgentSessionScanner.AgentSessionScanner;
           const scan = yield* scanner.scan;
+          expect.soft(scan.candidates.map((candidate) => candidate.threadCount)).toEqual([4]);
           const outcomes = yield* Stream.runCollect(scanner.recentThreads(workspace));
-          return { scan, outcomes: Array.from(outcomes) };
+          expect(
+            outcomes.map((outcome) =>
+              outcome._tag === "Importable" ? outcome.thread.providerSessionId : outcome._tag,
+            ),
+          ).toEqual(["session-100", "session-101", "session-102", "session-103"]);
         }).pipe(Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })));
-
-        expect(scan.candidates.map((candidate) => candidate.threadCount)).toEqual([4]);
-        expect(
-          outcomes.map((outcome) =>
-            outcome._tag === "Importable" ? outcome.thread.providerSessionId : outcome._tag,
-          ),
-        ).toEqual(["parent", "no-source", "null-source", "object-source"]);
       }),
     );
 
