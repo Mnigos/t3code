@@ -179,26 +179,23 @@ describe("DesktopLinuxUrlHandler", () => {
     assert.include(entry, "Icon=/home/al ice/icons/T3\\\\x.png");
   });
 
-  it("quotes the Exec argument only when it contains a reserved character", () => {
-    // xdg-open's generic fallback runs `command -v` on the first Exec word
-    // without unquoting it, so a plain path must be written bare.
-    assert.equal(
-      DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument("/home/alice/bin/t3code.AppImage"),
-      "/home/alice/bin/t3code.AppImage",
-    );
-    assert.equal(
-      DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument("/opt/T3(beta)/t3code.AppImage"),
-      '"/opt/T3(beta)/t3code.AppImage"',
-    );
-    assert.equal(
-      DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument("/opt/t3~old/t3code.AppImage"),
-      '"/opt/t3~old/t3code.AppImage"',
-    );
-    // A percent sign is not reserved, but must still be doubled (field codes).
-    assert.equal(
-      DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument("/opt/t3%20code/t3code.AppImage"),
-      "/opt/t3%%20code/t3code.AppImage",
-    );
+  it.each([
+    {
+      execTarget: "/opt/T3(beta)/t3code.AppImage",
+      execLine: 'Exec="/opt/T3(beta)/t3code.AppImage" %U',
+    },
+    {
+      execTarget: "/opt/t3%20code/t3code.AppImage",
+      execLine: "Exec=/opt/t3%%20code/t3code.AppImage %U",
+    },
+  ])("renders the handler Exec line for $execTarget", ({ execTarget, execLine }) => {
+    const entry = DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
+      displayName: "T3 Code",
+      execTarget,
+      scheme: "t3code",
+    });
+
+    assert.include(entry.split("\n"), execLine);
   });
 
   it("carries structured context on registration errors", () => {
@@ -269,7 +266,12 @@ describe("DesktopLinuxUrlHandler", () => {
 
       assert.include(
         recorded.files[0]?.content,
-        `Exec=${DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument(process.execPath)} %U`,
+        DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
+          displayName: "T3 Code (Alpha)",
+          execTarget: process.execPath,
+          scheme: "t3code",
+          iconPath: "/home/alice/.local/share/icons/com.t3tools.T3Code.desktop.png",
+        }),
       );
     });
   });

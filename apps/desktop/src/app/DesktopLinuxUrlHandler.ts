@@ -62,20 +62,24 @@ const escapeDesktopEntryString = (value: string): string =>
     .replaceAll("\r", "\\r")
     .replaceAll("\t", "\\t");
 
-// Characters the Desktop Entry spec reserves in Exec arguments ("The Exec key").
-const EXEC_RESERVED_CHARACTER = /[ \t\n"'\\><~|&;$*?#()`]/;
-
 // Exec values are unescaped twice by implementations: first the general
 // string-value rules, then the Exec quoting rules — so writing composes the
-// layers in reverse. Literal percent signs are always doubled (field codes).
-// The argument is quoted only when it contains a reserved character: xdg-open's
-// generic fallback does not unquote Exec, so a quoted plain path never resolves.
+// layers in reverse.
 export function escapeDesktopEntryExecArgument(value: string): string {
-  const literal = value.replaceAll("%", () => "%%");
-  if (!EXEC_RESERVED_CHARACTER.test(literal)) return escapeDesktopEntryString(literal);
-  const quoted = literal.replace(/["`$\\]/g, (character) => `\\${character}`);
+  const quoted = value
+    .replaceAll("\\", () => "\\\\")
+    .replaceAll("`", () => "\\`")
+    .replaceAll("$", () => "\\$")
+    .replaceAll('"', () => '\\"')
+    .replaceAll("%", () => "%%");
   return escapeDesktopEntryString(`"${quoted}"`);
 }
+
+// Legacy xdg-open looks up the first Exec word without unquoting it.
+const escapeUrlHandlerExecTarget = (value: string): string =>
+  /[ \t\n"'\\><~|&;$*?#()`]/.test(value)
+    ? escapeDesktopEntryExecArgument(value)
+    : escapeDesktopEntryString(value.replaceAll("%", "%%"));
 
 // The AppImage integration entry owns the window identity. This
 // hidden URL-only entry must not compete with it for StartupWMClass matching.
@@ -89,7 +93,7 @@ export function renderUrlHandlerDesktopEntry(input: {
     "[Desktop Entry]",
     "Type=Application",
     `Name=${escapeDesktopEntryString(input.displayName)}`,
-    `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} %U`,
+    `Exec=${escapeUrlHandlerExecTarget(input.execTarget)} %U`,
     ...(input.iconPath === undefined ? [] : [`Icon=${escapeDesktopEntryString(input.iconPath)}`]),
     "Terminal=false",
     "NoDisplay=true",
