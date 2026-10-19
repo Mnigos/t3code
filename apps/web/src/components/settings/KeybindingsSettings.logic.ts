@@ -243,15 +243,15 @@ export function groupKeybindingRows(
 
 export function buildKeybindingRows(
   keybindings: ResolvedKeybindingsConfig,
-  query: string,
 ): ReadonlyArray<KeybindingRow> {
-  const normalizedQuery = query.trim().toLowerCase();
-  const rows = keybindings.map((binding, index) => {
+  const rowsById = new Map<string, KeybindingRow>();
+  for (const binding of keybindings) {
     const defaultBinding = defaultBindingForBinding(binding);
     const key = shortcutToKeybindingInput(binding.shortcut);
     const when = whenAstToExpression(binding.whenAst);
-    return {
-      id: `${keybindingRowId(binding.command, key, when)}\u0000${index}`,
+    const id = keybindingRowId(binding.command, key, when);
+    rowsById.set(id, {
+      id,
       command: binding.command,
       key,
       when,
@@ -260,8 +260,9 @@ export function buildKeybindingRows(
       defaultWhen: whenAstToExpression(defaultBinding?.whenAst),
       binding,
       conflicts: [],
-    } satisfies KeybindingRow;
-  });
+    });
+  }
+  const rows = [...rowsById.values()];
 
   const rowsWithConflicts = rows.map((row) => {
     const conflicts = keybindingConflictLabels(rows, {
@@ -280,11 +281,18 @@ export function buildKeybindingRows(
     return left.key.localeCompare(right.key);
   });
 
-  if (normalizedQuery.length === 0) {
-    return rowsWithConflicts;
-  }
+  return rowsWithConflicts;
+}
 
-  return rowsWithConflicts.filter((row) => {
+// Filtering keeps the row objects so rows that stay visible while the query
+// changes receive the same props and skip rendering.
+export function filterKeybindingRows(
+  rows: ReadonlyArray<KeybindingRow>,
+  query: string,
+): ReadonlyArray<KeybindingRow> {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length === 0) return rows;
+  return rows.filter((row) => {
     return (
       row.command.toLowerCase().includes(normalizedQuery) ||
       commandLabel(row.command).toLowerCase().includes(normalizedQuery) ||
