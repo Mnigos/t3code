@@ -213,8 +213,9 @@ export function forgejoCommit(commit: typeof ForgejoCommit.Type): PullRequestCom
   };
 }
 
-// Forgejo's commit status states; Actions reports a job that did not run as `skipped` and a
-// cancelled job as `failure`. A skipped job is done, so it must not hold back "checks passed".
+// Forgejo Actions reports a job that did not run as `skipped` and a cancelled one as `failure`,
+// and `warning` is finished without being a pass. Only `pending` and states we do not know may
+// hold a watch open.
 function forgejoCheckStatus(state: string): PullRequestCheckStatus {
   switch (state) {
     case "success":
