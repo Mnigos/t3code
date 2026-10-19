@@ -14,14 +14,18 @@ const requireUndici = NodeModule.createRequire(import.meta.url);
 export const builtinFetchUsesHttp2 = (bundledUndiciVersion: string | undefined) =>
   Number.parseInt(bundledUndiciVersion ?? "", 10) >= 8;
 
+const hasProxyEnvironment = () =>
+  ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].some((name) => process.env[name]);
+
 /**
- * Node's `--use-env-proxy` / `NODE_USE_ENV_PROXY` installs an
- * `EnvHttpProxyAgent` at startup; that choice is kept so proxies still apply.
+ * Routes requests through `EnvHttpProxyAgent` when a proxy variable is set or
+ * Node's `--use-env-proxy` / `NODE_USE_ENV_PROXY` already installed one.
  */
 export function installHttp1FetchDispatcher(): void {
   const undici = requireUndici("undici") as typeof Undici;
   // Node's agent comes from its internal undici copy, so `instanceof` against the npm class is false.
-  const usesEnvProxy = undici.getGlobalDispatcher().constructor.name === "EnvHttpProxyAgent";
+  const usesEnvProxy =
+    hasProxyEnvironment() || undici.getGlobalDispatcher().constructor.name === "EnvHttpProxyAgent";
   undici.setGlobalDispatcher(
     usesEnvProxy
       ? new undici.EnvHttpProxyAgent({
@@ -38,9 +42,15 @@ export function installHttp1FetchDispatcher(): void {
  * An undici HTTP/2 session that hits its idle timeout can emit `'error'` on a
  * stream with no listener, which Node turns into an uncaught exception that
  * exits the server (https://github.com/nodejs/undici/issues/5936).
+ *
+ * Built-in fetch ignores `HTTPS_PROXY` and friends unless Node is started with
+ * `NODE_USE_ENV_PROXY=1`, yet users expect the variables curl honours to work (#21922).
  */
-export function keepOutboundFetchOnHttp1(): void {
-  if (builtinFetchUsesHttp2(process.versions.undici)) installHttp1FetchDispatcher();
+export function configureOutboundFetch(): void {
+  // npm undici is v8 on every runtime, so the replacement agent stays HTTP/1-only there too.
+  if (builtinFetchUsesHttp2(process.versions.undici) || hasProxyEnvironment()) {
+    installHttp1FetchDispatcher();
+  }
 }
 
 /**

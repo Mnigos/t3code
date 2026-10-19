@@ -1,4 +1,5 @@
-// @effect-diagnostics nodeBuiltinImport:off - the test runs a real TLS h2 server to see which protocol fetch negotiates.
+// @effect-diagnostics nodeBuiltinImport:off - the tests run real servers to see how fetch connects.
+import * as NodeHttp from "node:http";
 import * as NodeHttp2 from "node:http2";
 import * as NodeNet from "node:net";
 import * as NodeTls from "node:tls";
@@ -7,10 +8,11 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import * as Undici from "undici";
-import { afterAll, afterEach, beforeAll, describe, expect } from "vite-plus/test";
+import { afterAll, afterEach, beforeAll, describe, expect, vi } from "vite-plus/test";
 
 import {
   builtinFetchUsesHttp2,
+  configureOutboundFetch,
   extendConnectionAttemptTimeout,
   installHttp1FetchDispatcher,
 } from "./outboundHttp.ts";
@@ -42,7 +44,11 @@ const server = NodeHttp2.createSecureServer(
   { allowHTTP1: true, key: TEST_KEY, cert: TEST_CERT },
   (request, response) => response.end(request.httpVersion),
 );
+const target = NodeHttp.createServer((_request, response) => response.end("direct"));
+const proxy = NodeHttp.createServer((_request, response) => response.end("proxied"));
 let origin = "";
+let targetOrigin = "";
+let proxyOrigin = "";
 const defaultCaCertificates = NodeTls.getCACertificates("default");
 const defaultDispatcher = Undici.getGlobalDispatcher();
 const defaultAttemptTimeout = NodeNet.getDefaultAutoSelectFamilyAttemptTimeout();
@@ -51,9 +57,12 @@ beforeAll(async () => {
   NodeTls.setDefaultCACertificates([...defaultCaCertificates, TEST_CERT]);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `https://127.0.0.1:${(server.address() as NodeNet.AddressInfo).port}/`;
+  targetOrigin = await listenOnLoopback(target);
+  proxyOrigin = await listenOnLoopback(proxy);
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   Undici.setGlobalDispatcher(defaultDispatcher);
   NodeNet.setDefaultAutoSelectFamilyAttemptTimeout(defaultAttemptTimeout);
 });
@@ -61,12 +70,36 @@ afterEach(() => {
 afterAll(async () => {
   NodeTls.setDefaultCACertificates(defaultCaCertificates);
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  for (const httpServer of [target, proxy]) {
+    httpServer.closeAllConnections();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  }
 });
+
+async function listenOnLoopback(httpServer: NodeHttp.Server) {
+  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(httpServer.address() as NodeNet.AddressInfo).port}/`;
+}
+
+// Start each case from a shell with no proxy configured.
+const clearProxyEnvironment = () => {
+  for (const name of [
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "NODE_USE_ENV_PROXY",
+  ]) {
+    vi.stubEnv(name, undefined);
+  }
+};
 
 const versionViaGlobalDispatcher = async () => (await Undici.request(origin)).body.text();
 
-const versionViaBuiltinFetch = () =>
-  HttpClient.get(origin).pipe(
+const textViaBuiltinFetch = (url: string) =>
+  HttpClient.get(url).pipe(
     Effect.flatMap((response) => response.text),
     Effect.provide(FetchHttpClient.layer),
   );
@@ -90,11 +123,51 @@ describe("installHttp1FetchDispatcher", () => {
     "moves the built-in fetch off HTTP/2",
     () =>
       Effect.gen(function* () {
-        expect(yield* versionViaBuiltinFetch()).toBe("2.0");
+        expect(yield* textViaBuiltinFetch(origin)).toBe("2.0");
         installHttp1FetchDispatcher();
-        expect(yield* versionViaBuiltinFetch()).toBe("1.1");
+        expect(yield* textViaBuiltinFetch(origin)).toBe("1.1");
       }),
   );
+});
+
+describe("configureOutboundFetch", () => {
+  it("installs the env proxy agent for HTTPS_PROXY without NODE_USE_ENV_PROXY", () => {
+    clearProxyEnvironment();
+    vi.stubEnv("HTTPS_PROXY", proxyOrigin);
+    configureOutboundFetch();
+    expect(Undici.getGlobalDispatcher()).toBeInstanceOf(Undici.EnvHttpProxyAgent);
+  });
+
+  it.effect("routes the built-in fetch through HTTP_PROXY", () =>
+    Effect.gen(function* () {
+      clearProxyEnvironment();
+      vi.stubEnv("HTTP_PROXY", proxyOrigin);
+      configureOutboundFetch();
+      expect(yield* textViaBuiltinFetch(targetOrigin)).toBe("proxied");
+    }),
+  );
+
+  it.effect("connects directly to hosts listed in NO_PROXY", () =>
+    Effect.gen(function* () {
+      clearProxyEnvironment();
+      vi.stubEnv("HTTP_PROXY", proxyOrigin);
+      vi.stubEnv("NO_PROXY", "127.0.0.1");
+      configureOutboundFetch();
+      expect(yield* textViaBuiltinFetch(targetOrigin)).toBe("direct");
+    }),
+  );
+
+  it("only replaces the dispatcher for HTTP/2 without proxy variables", () => {
+    clearProxyEnvironment();
+    configureOutboundFetch();
+    const dispatcher = Undici.getGlobalDispatcher();
+    if (builtinFetchUsesHttp2(process.versions.undici)) {
+      expect(dispatcher).toBeInstanceOf(Undici.Agent);
+      expect(dispatcher).not.toBeInstanceOf(Undici.EnvHttpProxyAgent);
+    } else {
+      expect(dispatcher).toBe(defaultDispatcher);
+    }
+  });
 });
 
 describe("extendConnectionAttemptTimeout", () => {
