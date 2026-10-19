@@ -60,6 +60,7 @@ export const writeFileStringAtomically = (input: {
 
       yield* fs.writeFileString(tempPath, input.contents);
       // chmod, not a write `mode`, because the umask would mask it; the temp directory is 0700.
+      // On Windows chmod only toggles read-only, so a writable target stays writable.
       yield* fs.chmod(tempPath, mode);
       if (platform !== "win32") return yield* fs.rename(tempPath, targetPath);
 
