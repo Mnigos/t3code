@@ -2230,6 +2230,30 @@ const make = Effect.gen(function* () {
                 ),
               ),
             );
+          const stopped = yield* threadManagement
+            .getThreadRecords(current.childThreadId, ["runs"])
+            .pipe(Effect.mapError(threadManagementFailure));
+          for (const run of stopped.runs) {
+            if (
+              run.status !== "queued" ||
+              (run.delegatedTaskId !== input.taskId && run.id !== current.childRunId)
+            )
+              continue;
+            // Stop preserves the queue for Resume. Cancelling a task must also
+            // remove that task's queued turn, including a previously held one.
+            yield* threadManagement
+              .dispatch({
+                type: "queued-run.cancel",
+                commandId: stableCommandId({
+                  scope,
+                  requestKey: key,
+                  operation: `cancel-task-queued-run:${run.id}`,
+                }),
+                threadId: current.childThreadId,
+                runId: run.id,
+              })
+              .pipe(Effect.mapError(threadManagementFailure));
+          }
         });
         // Checked above; a user raising one of these threads meanwhile is
         // caught again under that thread's lock, which leaves it running.
@@ -2266,7 +2290,12 @@ const make = Effect.gen(function* () {
         const child = yield* loadProjection(current.childThreadId);
         if (
           current.workState !== "waiting_for_children" &&
-          ThreadManagementService.latestActiveRun(child) === undefined
+          ThreadManagementService.latestActiveRun(child) === undefined &&
+          !child.runs.some(
+            (run) =>
+              run.status === "queued" &&
+              (run.delegatedTaskId === input.taskId || run.id === current.childRunId),
+          )
         ) {
           return yield* failure(
             "task_not_cancellable",
@@ -2308,10 +2337,34 @@ const make = Effect.gen(function* () {
           input.threads,
           (request, index) =>
             Effect.gen(function* () {
+              const commandId = stableCommandId({
+                scope,
+                requestKey: key,
+                operation: "create-thread",
+                index,
+              });
+              const threadId = stableThreadId({
+                scope,
+                requestKey: key,
+                index,
+              });
+              const isRetryOfAcceptedCreation = yield* threadManagement.hasReceipt(commandId);
+              const committedThread = isRetryOfAcceptedCreation
+                ? yield* threadManagement
+                    .getThreadShell(threadId)
+                    .pipe(Effect.mapError(threadManagementFailure))
+                : null;
               const target = yield* resolveTargetRechecking({
                 parent,
-                target: request.target,
+                target:
+                  committedThread === null
+                    ? request.target
+                    : {
+                        ...request.target,
+                        providerInstanceId: committedThread.modelSelection.instanceId,
+                      },
                 providers,
+                skipProjectEnablementFilter: isRetryOfAcceptedCreation,
               });
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
@@ -2322,16 +2375,7 @@ const make = Effect.gen(function* () {
                 parent.thread.interactionMode,
                 request.interactionMode,
               );
-              const threadId = stableThreadId({
-                scope,
-                requestKey: key,
-                index,
-              });
-              yield* assertTargetEnabledForProject(
-                parent,
-                stableCommandId({ scope, requestKey: key, operation: "create-thread", index }),
-                target,
-              );
+              yield* assertTargetEnabledForProject(parent, commandId, target);
               const title = threadTitle({
                 parentTitle: parent.thread.title,
                 prompt: request.prompt,
@@ -2343,12 +2387,7 @@ const make = Effect.gen(function* () {
                   type: "thread.create",
                   createdBy: "agent",
                   creationSource: "mcp",
-                  commandId: stableCommandId({
-                    scope,
-                    requestKey: key,
-                    operation: "create-thread",
-                    index,
-                  }),
+                  commandId,
                   threadId,
                   projectId: parent.thread.projectId,
                   title,
@@ -2366,6 +2405,10 @@ const make = Effect.gen(function* () {
                     ),
                   ),
                 );
+              // A receipt can appear after target resolution; use the committed thread's selection.
+              const resolvedModelSelection = (yield* threadManagement
+                .getThreadRecords(threadId, [])
+                .pipe(Effect.mapError(threadManagementFailure))).thread.modelSelection;
               if (request.prompt !== undefined) {
                 yield* threadManagement
                   .dispatch({
@@ -2387,15 +2430,17 @@ const make = Effect.gen(function* () {
                     }),
                     text: request.prompt,
                     attachments: [],
-                    modelSelection: target.modelSelection,
+                    modelSelection: resolvedModelSelection,
                     dispatchMode: { type: "start_immediately" },
                   })
                   .pipe(
                     Effect.mapError((error) =>
-                      failure(
-                        "orchestration_error",
-                        `Unable to start thread ${index + 1}: ${errorMessage(error)}`,
-                      ),
+                      error._tag === "ThreadManagementProviderInstanceDisabledError"
+                        ? threadManagementFailure(error)
+                        : failure(
+                            "orchestration_error",
+                            `Unable to start thread ${index + 1}: ${errorMessage(error)}`,
+                          ),
                     ),
                   );
               }
@@ -2431,8 +2476,8 @@ const make = Effect.gen(function* () {
                 title: projection.thread.title,
                 createdBy: projection.thread.createdBy,
                 creationSource: projection.thread.creationSource,
-                providerInstanceId: target.modelSelection.instanceId,
-                model: target.modelSelection.model,
+                providerInstanceId: resolvedModelSelection.instanceId,
+                model: resolvedModelSelection.model,
               } satisfies OrchestratorMcpCreatedThread;
             }),
           { concurrency: 1 },
