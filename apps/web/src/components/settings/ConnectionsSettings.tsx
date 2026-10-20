@@ -2005,9 +2005,10 @@ function CloudRemoteEnvironmentRows({
 
 // Subscribes on its own so desktop download progress does not re-render the page.
 function LocalVersionStatusLabel() {
+  const updateState = useDesktopUpdateState();
   return (
     <span className="text-xs text-muted-foreground">
-      {resolveLocalVersionStatusLabel(useDesktopUpdateState())}
+      {resolveLocalVersionStatusLabel(updateState)}
     </span>
   );
 }

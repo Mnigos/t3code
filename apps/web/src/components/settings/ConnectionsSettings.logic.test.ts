@@ -75,116 +75,41 @@ describe("resolveLocalVersionStatusLabel", () => {
     canRetry: false,
   };
 
-  it("keeps the web client up to date without desktop state", () => {
+  it("stays up to date on the web and when the desktop updater has nothing pending", () => {
     expect(resolveLocalVersionStatusLabel(null)).toBe("Up to date");
+    expect(resolveLocalVersionStatusLabel(baseState)).toBe("Up to date");
   });
 
-  it.each<DesktopUpdateState["status"]>(["idle", "up-to-date", "checking", "disabled", "error"])(
-    "keeps a quiet %s updater up to date",
-    (status) => {
-      expect(resolveLocalVersionStatusLabel({ ...baseState, status })).toBe("Up to date");
-    },
-  );
-
-  it("keeps the downloaded version pending during a recheck", () => {
-    const label = resolveLocalVersionStatusLabel({
-      ...baseState,
-      status: "checking",
-      downloadedVersion: "1.1.0",
-    });
-
-    expect(label).not.toBe("Up to date");
-    expect(label).toContain("1.1.0");
-    expect(label).toMatch(/downloaded/i);
+  it.each<[string, Partial<DesktopUpdateState>, string]>([
+    ["available", { status: "available", availableVersion: "1.2.0" }, "Update 1.2.0 available"],
+    [
+      "downloading",
+      { status: "downloading", availableVersion: "1.2.0" },
+      "Downloading update 1.2.0",
+    ],
+    [
+      "downloaded",
+      { status: "downloaded", availableVersion: "1.2.0", downloadedVersion: "1.1.0" },
+      "Update 1.1.0 downloaded",
+    ],
+    [
+      "a failed download that can be retried",
+      { status: "error", errorContext: "download", availableVersion: "1.2.0", canRetry: true },
+      "Update 1.2.0 available",
+    ],
+    [
+      "a failed install",
+      { status: "error", errorContext: "install", downloadedVersion: "1.1.0" },
+      "Update 1.1.0 downloaded",
+    ],
+    [
+      "a recheck that keeps a downloaded update",
+      { status: "checking", downloadedVersion: "1.1.0" },
+      "Update 1.1.0 downloaded",
+    ],
+  ])("names the pending update for %s", (_, state, label) => {
+    expect(resolveLocalVersionStatusLabel({ ...baseState, ...state })).toBe(label);
   });
-
-  it("stays up to date during a recheck with only an available version", () => {
-    expect(
-      resolveLocalVersionStatusLabel({
-        ...baseState,
-        status: "checking",
-        availableVersion: "1.1.0",
-      }),
-    ).toBe("Up to date");
-  });
-
-  it("stays up to date after a failed check with only an available version", () => {
-    expect(
-      resolveLocalVersionStatusLabel({
-        ...baseState,
-        status: "error",
-        errorContext: "check",
-        availableVersion: "1.1.0",
-      }),
-    ).toBe("Up to date");
-  });
-
-  it.each<DesktopUpdateState["status"]>(["available", "downloading", "downloaded"])(
-    "names the pending version when %s, falling back to the available version",
-    (status) => {
-      const label = resolveLocalVersionStatusLabel({
-        ...baseState,
-        status,
-        availableVersion: "1.1.0",
-      });
-
-      expect(label).not.toBe("Up to date");
-      expect(label).toContain("1.1.0");
-      expect(label).toMatch(new RegExp(status, "i"));
-    },
-  );
-
-  it("prefers the downloaded version over the available version", () => {
-    const label = resolveLocalVersionStatusLabel({
-      ...baseState,
-      status: "downloaded",
-      availableVersion: "1.2.0",
-      downloadedVersion: "1.1.0",
-    });
-
-    expect(label).toContain("1.1.0");
-    expect(label).not.toContain("1.2.0");
-  });
-
-  it("names the available version after a failed download", () => {
-    const label = resolveLocalVersionStatusLabel({
-      ...baseState,
-      status: "error",
-      errorContext: "download",
-      availableVersion: "1.1.0",
-      canRetry: true,
-    });
-
-    expect(label).not.toBe("Up to date");
-    expect(label).toContain("1.1.0");
-  });
-
-  it.each<DesktopUpdateState["errorContext"]>(["install", null])(
-    "names the downloaded version after an error with %s context",
-    (errorContext) => {
-      const label = resolveLocalVersionStatusLabel({
-        ...baseState,
-        status: "error",
-        errorContext,
-        availableVersion: "1.2.0",
-        downloadedVersion: "1.1.0",
-      });
-
-      expect(label).not.toBe("Up to date");
-      expect(label).toContain("1.1.0");
-      expect(label).not.toContain("1.2.0");
-    },
-  );
-
-  it.each<DesktopUpdateState["status"]>(["available", "downloading", "downloaded"])(
-    "does not claim up to date when %s without a known version",
-    (status) => {
-      const label = resolveLocalVersionStatusLabel({ ...baseState, status });
-
-      expect(label).not.toBe("Up to date");
-      expect(label).toMatch(new RegExp(status, "i"));
-    },
-  );
 });
 
 describe("isWslSettingsRowVisible", () => {

@@ -76,12 +76,12 @@ export function isWslSettingsRowVisible(input: {
 }
 
 /**
- * Passive status for this machine's Version row when the client and server
- * versions match. The desktop bundles its server, so a pending app update is
- * the only way it falls behind. Pending updates follow the sidebar update
- * control's action, including retryable failures, so both agree; the sidebar
- * is where to act on it. A recheck never drops a downloaded update, so it
- * keeps its label while `checking`. `state` is null outside the desktop app.
+ * Passive label for this machine's Version row once client and server versions
+ * match. The desktop bundles its server, so a pending app update is the only
+ * way it falls behind. Pending states follow the sidebar update control's
+ * action, including retryable failures, so the two never disagree; the sidebar
+ * is where to act. A recheck keeps a downloaded update while `checking`, so it
+ * keeps its label too. `state` is null outside the desktop app.
  */
 export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null): string {
   if (!state) return "Up to date";
