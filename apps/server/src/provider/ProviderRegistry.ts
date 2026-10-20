@@ -124,15 +124,17 @@ export function upsertProviderWorkspaceSnapshot(
   cwd: string,
   scopedSnapshot: ProviderWorkspaceSnapshot,
 ): ServerProvider {
+  const previousSnapshot = provider.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd);
+  const optionDescriptors = scopedSnapshot.optionDescriptors ?? previousSnapshot?.optionDescriptors;
   const workspaceSnapshot = {
     cwd,
     checkedAt: scopedSnapshot.checkedAt,
     slashCommands: scopedSnapshot.slashCommandsPending
-      ? (provider.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd)?.slashCommands ??
-        scopedSnapshot.slashCommands)
+      ? (previousSnapshot?.slashCommands ?? scopedSnapshot.slashCommands)
       : scopedSnapshot.slashCommands,
     ...(scopedSnapshot.slashCommandsPending ? { slashCommandsPending: true } : {}),
     skills: scopedSnapshot.skills,
+    ...(optionDescriptors === undefined ? {} : { optionDescriptors }),
   } satisfies NonNullable<ServerProvider["workspaceSnapshots"]>[number];
   return {
     ...provider,
@@ -452,21 +454,22 @@ export const layer = Layer.effect(
       liveSubsRef,
     ).pipe(Effect.map((map) => Array.from(map.values(), buildSnapshotSource)));
 
-    const persistProvider = (provider: ServerProvider) =>
-      Effect.gen(function* () {
-        const key = snapshotInstanceKey(provider);
-        const filePath = yield* resolveProviderStatusCachePath({
-          cacheDir: config.providerStatusCacheDir,
-          instanceId: key,
-        }).pipe(Effect.provideService(Path.Path, path));
-        const { workspaceSnapshots: _workspaceSnapshots, ...machineProvider } = provider;
-        yield* writeProviderStatusCache({ filePath, provider: machineProvider }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-          Effect.tapError(Effect.logError),
-          Effect.ignore,
-        );
-      });
+    const persistProvider = Effect.fn("ProviderRegistry.persistProvider")(function* (
+      provider: ServerProvider,
+    ) {
+      const key = snapshotInstanceKey(provider);
+      const filePath = yield* resolveProviderStatusCachePath({
+        cacheDir: config.providerStatusCacheDir,
+        instanceId: key,
+      }).pipe(Effect.provideService(Path.Path, path));
+      const { workspaceSnapshots: _workspaceSnapshots, ...machineProvider } = provider;
+      yield* writeProviderStatusCache({ filePath, provider: machineProvider }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.tapError(Effect.logError),
+        Effect.ignore,
+      );
+    });
 
     const applyProviderUpdateState = Effect.fn("applyProviderUpdateState")(function* (
       provider: ServerProvider,
