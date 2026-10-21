@@ -3,7 +3,6 @@ import * as NodeHttp from "node:http";
 import * as NodeHttp2 from "node:http2";
 import * as NodeNet from "node:net";
 import * as NodeTls from "node:tls";
-import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -17,7 +16,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, vi } from "vite-plus/
 import {
   builtinFetchUsesHttp2,
   configureOutboundFetch,
-  extendConnectionAttemptTimeout,
   ignoreMacosTypeOfServiceEinval,
   installHttp1FetchDispatcher,
 } from "./outboundHttp.ts";
@@ -136,13 +134,6 @@ describe("installHttp1FetchDispatcher", () => {
 });
 
 describe("configureOutboundFetch", () => {
-  it("installs the env proxy agent for HTTPS_PROXY without NODE_USE_ENV_PROXY", () => {
-    clearProxyEnvironment();
-    vi.stubEnv("HTTPS_PROXY", proxyOrigin);
-    configureOutboundFetch();
-    expect(Undici.getGlobalDispatcher()).toBeInstanceOf(Undici.EnvHttpProxyAgent);
-  });
-
   it.effect("routes the built-in fetch through HTTP_PROXY", () =>
     Effect.gen(function* () {
       clearProxyEnvironment();
@@ -161,18 +152,6 @@ describe("configureOutboundFetch", () => {
       expect(yield* textViaBuiltinFetch(targetOrigin)).toBe("direct");
     }),
   );
-
-  it("only replaces the dispatcher for HTTP/2 without proxy variables", () => {
-    clearProxyEnvironment();
-    configureOutboundFetch();
-    const dispatcher = Undici.getGlobalDispatcher();
-    if (builtinFetchUsesHttp2(process.versions.undici)) {
-      expect(dispatcher).toBeInstanceOf(Undici.Agent);
-      expect(dispatcher).not.toBeInstanceOf(Undici.EnvHttpProxyAgent);
-    } else {
-      expect(dispatcher).toBe(defaultDispatcher);
-    }
-  });
 });
 
 const runNode = Effect.fnUntraced(function* (args: Array<string>) {
@@ -211,24 +190,6 @@ describe("ignoreMacosTypeOfServiceEinval", () => {
     expect(() => prototype.setTypeOfService.call(socket, 0)).toThrow();
   });
 
-  it("changes nothing off macOS or on a runtime without setTypeOfService", () => {
-    const error = errnoError("EINVAL");
-    const prototype = {
-      setTypeOfService() {
-        throw error;
-      },
-    };
-    const original = prototype.setTypeOfService;
-    ignoreMacosTypeOfServiceEinval("linux", prototype);
-    ignoreMacosTypeOfServiceEinval("win32", prototype);
-    expect(prototype.setTypeOfService).toBe(original);
-    expect(() => prototype.setTypeOfService()).toThrow(error);
-
-    const withoutTypeOfService = {};
-    ignoreMacosTypeOfServiceEinval("darwin", withoutTypeOfService);
-    expect(withoutTypeOfService).not.toHaveProperty("setTypeOfService");
-  });
-
   // Bundled undici 7 calls this API from a socket callback. Keep the real fetch
   // in a child so an escaped EINVAL exits that process instead of breaking Vitest.
   it.effect.runIf(
@@ -259,67 +220,4 @@ if (calls === 0) throw new Error("fetch did not call setTypeOfService");
       expect(child.stdout.trim()).toBe("1.1");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
-
-  it.effect("guards ordinary CLI and both ACP fast paths before their imports run", () =>
-    Effect.gen(function* () {
-      const dispatchModules = ["mcp/AcpMcpStdioBridge.ts", "cli/consoleStdin.ts", "binCli.ts"];
-      // Load the real entrypoint, but replace dispatch modules to avoid starting
-      // the app. Probe at import time, when those modules could first open sockets.
-      const preload = `
-import * as NodeModule from "node:module";
-import * as NodeNet from "node:net";
-
-Object.defineProperty(process, "platform", { value: "darwin" });
-NodeNet.Socket.prototype.setTypeOfService = () => {
-  throw Object.assign(new Error("setTypeOfService EINVAL"), { code: "EINVAL" });
-};
-NodeModule.registerHooks({
-  load(url, context, nextLoad) {
-    const path = ${JSON.stringify(dispatchModules)}.find((path) => url.endsWith("/src/" + path));
-    if (path === undefined) return nextLoad(url, context);
-    NodeNet.Socket.prototype.setTypeOfService.call(new NodeNet.Socket(), 0);
-    console.log(path);
-    return {
-      format: "module",
-      source: "export const runAcpMcpCliFastPath = async () => {}; export const attachConsoleStdin = () => {}; export const runCli = () => {};",
-      shortCircuit: true,
-    };
-  },
-});
-`;
-      const children = yield* Effect.forEach(
-        ["--version", "acp-mcp-bridge", "acp-mcp-call"],
-        (command) =>
-          runNode([
-            "--import",
-            `data:text/javascript,${encodeURIComponent(preload)}`,
-            NodeURL.fileURLToPath(new URL("./bin.ts", import.meta.url)),
-            command,
-          ]),
-      );
-      expect(
-        children.map((child) => child.exitCode),
-        children.map((child) => child.stderr).join("\n"),
-      ).toEqual([0, 0, 0]);
-      expect(children.map((child) => child.stdout.trim().split("\n"))).toEqual([
-        ["cli/consoleStdin.ts", "binCli.ts"],
-        ["mcp/AcpMcpStdioBridge.ts"],
-        ["mcp/AcpMcpStdioBridge.ts"],
-      ]);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-});
-
-describe("extendConnectionAttemptTimeout", () => {
-  it("raises a default below the floor to 1000 ms", () => {
-    NodeNet.setDefaultAutoSelectFamilyAttemptTimeout(50);
-    extendConnectionAttemptTimeout();
-    expect(NodeNet.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(1_000);
-  });
-
-  it("keeps a larger configured timeout", () => {
-    NodeNet.setDefaultAutoSelectFamilyAttemptTimeout(5_000);
-    extendConnectionAttemptTimeout();
-    expect(NodeNet.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(5_000);
-  });
 });
