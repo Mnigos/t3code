@@ -18,6 +18,15 @@ const hasProxyEnvironment = () =>
   ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].some((name) => process.env[name]);
 
 /**
+ * The user's `NO_PROXY` plus loopback. The server talks to local providers and
+ * its own MCP endpoint over loopback, which a proxy would break.
+ */
+const noProxyWithLoopback = () =>
+  [process.env.NO_PROXY ?? process.env.no_proxy, "localhost", "127.0.0.1", "::1"]
+    .filter(Boolean)
+    .join(",");
+
+/**
  * Routes requests through `EnvHttpProxyAgent` when a proxy variable is set or
  * Node's `--use-env-proxy` / `NODE_USE_ENV_PROXY` already installed one.
  */
@@ -30,6 +39,7 @@ export function installHttp1FetchDispatcher(): void {
     usesEnvProxy
       ? new undici.EnvHttpProxyAgent({
           allowH2: false,
+          noProxy: noProxyWithLoopback(),
           // The connection to an HTTPS proxy is built here, not from `allowH2`. ProxyAgent's
           // `connect` option is dropped on purpose: its connector has h2 fixed on.
           clientFactory: (origin) => new undici.Pool(origin, { allowH2: false }),

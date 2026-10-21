@@ -49,23 +49,11 @@ const server = NodeHttp2.createSecureServer(
 );
 const target = NodeHttp.createServer((_request, response) => response.end("direct"));
 const proxy = NodeHttp.createServer((_request, response) => response.end("proxied"));
-// Tunnels CONNECT requests to the TLS server, recording each authority it was asked for.
+// Records each CONNECT authority it is asked for, then refuses the tunnel.
 const tunnelledAuthorities: Array<string> = [];
-const tunnelSockets = new Set<NodeNet.Socket>();
-proxy.on("connect", (request, clientSocket: NodeNet.Socket, head) => {
+proxy.on("connect", (request, clientSocket: NodeNet.Socket) => {
   tunnelledAuthorities.push(request.url ?? "");
-  const [host, port] = (request.url ?? "").split(":");
-  const upstream = NodeNet.connect(Number(port), host, () => {
-    clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-    upstream.write(head);
-    upstream.pipe(clientSocket);
-    clientSocket.pipe(upstream);
-  });
-  for (const socket of [clientSocket, upstream]) {
-    tunnelSockets.add(socket);
-    socket.on("error", () => socket.destroy());
-    socket.on("close", () => tunnelSockets.delete(socket));
-  }
+  clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
 });
 let origin = "";
 let targetOrigin = "";
@@ -91,7 +79,6 @@ afterEach(() => {
 afterAll(async () => {
   NodeTls.setDefaultCACertificates(defaultCaCertificates);
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  for (const socket of tunnelSockets) socket.destroy();
   for (const httpServer of [target, proxy]) {
     httpServer.closeAllConnections();
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
@@ -155,20 +142,19 @@ describe("installHttp1FetchDispatcher", () => {
 });
 
 describe("configureOutboundFetch", () => {
-  it.effect("tunnels an HTTPS request through HTTPS_PROXY", () =>
+  it.effect("sends an HTTPS request to HTTPS_PROXY as a CONNECT", () =>
     Effect.gen(function* () {
       vi.stubEnv("HTTPS_PROXY", proxyOrigin);
       tunnelledAuthorities.length = 0;
       configureOutboundFetch();
-      expect(yield* textViaBuiltinFetch(origin)).toBe("1.1");
-      expect(tunnelledAuthorities).toEqual([new URL(origin).host]);
+      yield* Effect.exit(textViaBuiltinFetch("https://t3-proxy-test.invalid/"));
+      expect(tunnelledAuthorities).toEqual(["t3-proxy-test.invalid:443"]);
     }),
   );
 
-  it.effect("connects directly to hosts listed in NO_PROXY", () =>
+  it.effect("reaches loopback directly even when NO_PROXY does not list it", () =>
     Effect.gen(function* () {
       vi.stubEnv("HTTP_PROXY", proxyOrigin);
-      vi.stubEnv("NO_PROXY", "127.0.0.1");
       configureOutboundFetch();
       expect(yield* textViaBuiltinFetch(targetOrigin)).toBe("direct");
     }),
