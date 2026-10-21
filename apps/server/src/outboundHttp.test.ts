@@ -11,7 +11,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import * as Undici from "undici";
-import { afterAll, afterEach, beforeAll, describe, expect, vi } from "vite-plus/test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, vi } from "vite-plus/test";
 
 import {
   builtinFetchUsesHttp2,
@@ -103,7 +103,6 @@ async function listenOnLoopback(httpServer: NodeHttp.Server) {
   return `http://127.0.0.1:${(httpServer.address() as NodeNet.AddressInfo).port}/`;
 }
 
-// Start each case from a shell with no proxy configured.
 const clearProxyEnvironment = () => {
   for (const name of [
     "HTTPS_PROXY",
@@ -117,6 +116,9 @@ const clearProxyEnvironment = () => {
     vi.stubEnv(name, undefined);
   }
 };
+
+// Proxy variables in the developer's shell would otherwise reach every dispatcher test.
+beforeEach(() => clearProxyEnvironment());
 
 const versionViaGlobalDispatcher = async () => (await Undici.request(origin)).body.text();
 
@@ -155,7 +157,6 @@ describe("installHttp1FetchDispatcher", () => {
 describe("configureOutboundFetch", () => {
   it.effect("tunnels an HTTPS request through HTTPS_PROXY", () =>
     Effect.gen(function* () {
-      clearProxyEnvironment();
       vi.stubEnv("HTTPS_PROXY", proxyOrigin);
       tunnelledAuthorities.length = 0;
       configureOutboundFetch();
@@ -166,7 +167,6 @@ describe("configureOutboundFetch", () => {
 
   it.effect("connects directly to hosts listed in NO_PROXY", () =>
     Effect.gen(function* () {
-      clearProxyEnvironment();
       vi.stubEnv("HTTP_PROXY", proxyOrigin);
       vi.stubEnv("NO_PROXY", "127.0.0.1");
       configureOutboundFetch();
