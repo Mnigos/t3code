@@ -15,7 +15,7 @@ const hasProxyEnvironment = () =>
 
 /** The user's NO_PROXY plus loopback: local providers and T3's own MCP endpoint must bypass the proxy. */
 const noProxyWithLoopback = () =>
-  [process.env.NO_PROXY ?? process.env.no_proxy, "localhost", "127.0.0.1", "::1"]
+  [process.env.no_proxy ?? process.env.NO_PROXY, "localhost", "127.0.0.1", "::1"]
     .filter(Boolean)
     .join(",");
 

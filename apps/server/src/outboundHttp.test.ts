@@ -149,6 +149,18 @@ describe("configureOutboundFetch", () => {
     }),
   );
 
+  it.effect("preserves lowercase no_proxy precedence", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("HTTPS_PROXY", proxyOrigin);
+      vi.stubEnv("NO_PROXY", "other.invalid");
+      vi.stubEnv("no_proxy", "t3-proxy-test.invalid");
+      tunnelledAuthorities.length = 0;
+      configureOutboundFetch();
+      yield* Effect.exit(textViaBuiltinFetch("https://t3-proxy-test.invalid/"));
+      expect(tunnelledAuthorities).toEqual([]);
+    }),
+  );
+
   it.effect("reaches loopback directly even when NO_PROXY does not list it", () =>
     Effect.gen(function* () {
       vi.stubEnv("HTTP_PROXY", proxyOrigin);
