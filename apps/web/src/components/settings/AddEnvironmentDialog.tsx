@@ -595,9 +595,9 @@ export function AddEnvironmentDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
-      onOpenChangeComplete={(nextOpen) => {
+      onOpenChange={(nextOpen) => {
         if (!nextOpen) resetForm();
+        onOpenChange(nextOpen);
       }}
     >
       <Tooltip>
