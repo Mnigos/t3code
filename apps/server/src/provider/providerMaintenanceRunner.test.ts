@@ -442,7 +442,24 @@ describe("providerMaintenanceRunner", () => {
     );
   });
 
-  it.effect("records command failure output in provider update state", () =>
+  it.effect.each([
+    {
+      name: "a trailing reason",
+      stderr: "Error: Could not detect the Codex installation method.\n\n",
+      reason: "Error: Could not detect the Codex installation method.",
+    },
+    {
+      name: "a reason followed by a diagnostics hint",
+      stderr: [
+        "Error: Failed to install native update",
+        "TelemetrySafeError: Failed to fetch version from https://downloads.claude.ai/claude-code-releases/latest after 3 attempt(s): Request failed with status code 403",
+        'Try running "claude doctor" for diagnostics',
+        "",
+      ].join("\n"),
+      reason:
+        "TelemetrySafeError: Failed to fetch version from https://downloads.claude.ai/claude-code-releases/latest after 3 attempt(s): Request failed with status code 403",
+    },
+  ])("records command failure output with $name", ({ stderr, reason }) =>
     Effect.gen(function* () {
       const { registry } = yield* makeRegistry();
       const updater = yield* makeTestRunner(registry);
@@ -451,21 +468,14 @@ describe("providerMaintenanceRunner", () => {
       const updateState = result.providers[0]?.updateState;
 
       assert.strictEqual(updateState?.status, "failed");
-      assert.strictEqual(
-        updateState?.message,
-        "Update command exited with code 1: Error: Could not detect the Codex installation method.",
-      );
+      assert.strictEqual(updateState?.message, `Update command exited with code 1: ${reason}`);
       assert.include(updateState?.output ?? "", "checking install");
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
           layerNonWindowsPlatform,
           layerLatestVersionHttpClient("0.0.0"),
-          layerMockSpawner(() => ({
-            stdout: "checking install\n",
-            stderr: "Error: Could not detect the Codex installation method.\n\n",
-            code: 1,
-          })),
+          layerMockSpawner(() => ({ stdout: "checking install\n", stderr, code: 1 })),
         ),
       ),
     ),

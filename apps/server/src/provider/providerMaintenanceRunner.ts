@@ -239,13 +239,17 @@ function commandOutput(result: ProviderMaintenanceCommandResult): string | null 
   return truncateText(output, UPDATE_OUTPUT_MAX_BYTES);
 }
 
-// Updaters print their reason last, usually on stderr.
-function lastOutputLine(result: ProviderMaintenanceCommandResult): string | null {
+// Updaters print their reason last, usually on stderr, sometimes followed by a
+// hint such as `Try running "claude doctor" for diagnostics`.
+const DIAGNOSTIC_HINT = /^try running\b/i;
+
+function failureReason(result: ProviderMaintenanceCommandResult): string | null {
   for (const output of [result.stderr, result.stdout]) {
-    const line = output
+    const lines = output
       .split(/\r\n|\r|\n/)
       .map(toProgressLine)
-      .findLast(Boolean);
+      .filter((line) => line !== null);
+    const line = lines.findLast((value) => !DIAGNOSTIC_HINT.test(value)) ?? lines.at(-1);
     if (line) {
       return line;
     }
@@ -261,7 +265,7 @@ function failureMessage(result: ProviderMaintenanceCommandResult): string {
     result.exitCode !== null && result.exitCode !== 0
       ? `Update command exited with code ${result.exitCode}`
       : "Update command failed";
-  const reason = lastOutputLine(result);
+  const reason = failureReason(result);
   return reason ? `${summary}: ${reason}` : `${summary}.`;
 }
 
