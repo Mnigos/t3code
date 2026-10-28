@@ -241,7 +241,7 @@ function commandOutput(result: ProviderMaintenanceCommandResult): string | null 
 
 // Updaters print their reason last, usually on stderr, sometimes followed by a
 // hint such as `Try running "claude doctor" for diagnostics`.
-const DIAGNOSTIC_HINT = /^try running\b/i;
+const DIAGNOSTIC_HINT = /^try running .+ for diagnostics\.?$/i;
 
 function failureReason(result: ProviderMaintenanceCommandResult): string | null {
   for (const output of [result.stderr, result.stdout]) {

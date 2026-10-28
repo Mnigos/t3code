@@ -459,6 +459,11 @@ describe("providerMaintenanceRunner", () => {
       reason:
         "TelemetrySafeError: Failed to fetch version from https://downloads.claude.ai/claude-code-releases/latest after 3 attempt(s): Request failed with status code 403",
     },
+    {
+      name: "a trailing instruction",
+      stderr: "Checking installation\nTry running npm install -g @openai/codex manually\n",
+      reason: "Try running npm install -g @openai/codex manually",
+    },
   ])("records command failure output with $name", ({ stderr, reason }) =>
     Effect.gen(function* () {
       const { registry } = yield* makeRegistry();
