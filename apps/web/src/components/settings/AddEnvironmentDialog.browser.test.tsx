@@ -1,4 +1,6 @@
-import { Atom } from "effect/reactivity";
+import { Atom, AsyncResult } from "effect/reactivity";
+import * as Cause from "effect/Cause";
+import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { useState } from "react";
 import { page, userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -7,7 +9,9 @@ import { render, stubGlobal } from "../../../test/render";
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 
 const mocks = vi.hoisted(() => ({
-  connectSshEnvironment: vi.fn(async () => ({ _tag: "Success" as const })),
+  connectSshEnvironment: vi.fn<() => Promise<AtomCommandResult<void, Error>>>(async () =>
+    AsyncResult.success(undefined),
+  ),
   refresh: () => {},
 }));
 
@@ -114,5 +118,22 @@ describe("AddEnvironmentDialog", () => {
     await expect.element(page.getByPlaceholder("Search hosts or type devbox")).toHaveValue("");
     await expect.element(page.getByPlaceholder("root")).toHaveValue("");
     await expect.element(page.getByPlaceholder("22")).toHaveValue("");
+
+    let finishConnection!: (result: AtomCommandResult<void, Error>) => void;
+    const pending = new Promise<AtomCommandResult<void, Error>>((resolve) => {
+      finishConnection = resolve;
+    });
+    mocks.connectSshEnvironment.mockImplementationOnce(() => pending);
+    await userEvent.type(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
+    await userEvent.click(
+      page.getByRole("dialog").getByRole("button", { name: "Add environment" }),
+    );
+    await userEvent.keyboard("{Escape}");
+    await expectDefaultModeAfterReopen();
+    finishConnection(AsyncResult.failure(Cause.fail(new Error("dismissed SSH attempt"))));
+    await expect
+      .element(page.getByRole("dialog").getByRole("button", { name: "Add environment" }))
+      .toBeEnabled();
+    await expect.element(page.getByText(/dismissed SSH attempt/)).not.toBeInTheDocument();
   });
 });
