@@ -146,13 +146,16 @@ export function AddEnvironmentDialog({
   const hasSshHostSuggestionContent =
     desktopBridge !== undefined &&
     (isLoadingDiscoveredSshHosts || unsavedDiscoveredSshHosts.length > 0);
-  const resetForm = () => {
-    setSavedBackendMode("remote");
-    setSavedBackendHost("");
-    setSavedBackendPairingCode("");
-    setSavedBackendSshHost("");
-    setSavedBackendSshUsername("");
-    setSavedBackendSshPort("");
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setSavedBackendMode("remote");
+      setSavedBackendHost("");
+      setSavedBackendPairingCode("");
+      setSavedBackendSshHost("");
+      setSavedBackendSshUsername("");
+      setSavedBackendSshPort("");
+    }
+    onOpenChange(nextOpen);
   };
   const connectSavedBackendSshTarget = async (target: DesktopSshEnvironmentTarget) => {
     setIsAddingSavedBackend(true);
@@ -170,8 +173,7 @@ export function AddEnvironmentDialog({
       return;
     }
 
-    resetForm();
-    onOpenChange(false);
+    handleOpenChange(false);
     toastManager.add({
       type: "success",
       title: routeTarget ? "Route added" : "Environment connected",
@@ -243,8 +245,7 @@ export function AddEnvironmentDialog({
       return;
     }
 
-    resetForm();
-    onOpenChange(false);
+    handleOpenChange(false);
     toastManager.add(
       routeTarget
         ? {
@@ -434,7 +435,7 @@ export function AddEnvironmentDialog({
       }
       return;
     }
-    onOpenChange(false);
+    handleOpenChange(false);
     toastManager.add({
       type: "success",
       title: "Route added",
@@ -595,13 +596,7 @@ export function AddEnvironmentDialog({
   );
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen) resetForm();
-        onOpenChange(nextOpen);
-      }}
-    >
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <Tooltip>
         <TooltipTrigger
           render={
