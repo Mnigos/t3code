@@ -46,6 +46,7 @@ const server = NodeHttp2.createSecureServer(
   (request, response) => response.end(request.httpVersion),
 );
 const target = NodeHttp.createServer((_request, response) => response.end("direct"));
+const ipv6Target = NodeHttp.createServer((_request, response) => response.end("direct"));
 const proxy = NodeHttp.createServer((_request, response) => response.end("proxied"));
 // Records each CONNECT authority it is asked for, then refuses the tunnel.
 const tunnelledAuthorities: Array<string> = [];
@@ -56,6 +57,7 @@ proxy.on("connect", (request, clientSocket: NodeNet.Socket) => {
 let origin = "";
 let targetOrigin = "";
 let proxyOrigin = "";
+let ipv6TargetOrigin = "";
 const defaultCaCertificates = NodeTls.getCACertificates("default");
 const defaultDispatcher = Undici.getGlobalDispatcher();
 const defaultAttemptTimeout = NodeNet.getDefaultAutoSelectFamilyAttemptTimeout();
@@ -66,6 +68,7 @@ beforeAll(async () => {
   origin = `https://127.0.0.1:${(server.address() as NodeNet.AddressInfo).port}/`;
   targetOrigin = await listenOnLoopback(target);
   proxyOrigin = await listenOnLoopback(proxy);
+  ipv6TargetOrigin = await listenOnLoopback(ipv6Target, "::1");
 });
 
 afterEach(() => {
@@ -77,15 +80,15 @@ afterEach(() => {
 afterAll(async () => {
   NodeTls.setDefaultCACertificates(defaultCaCertificates);
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  for (const httpServer of [target, proxy]) {
+  for (const httpServer of [target, proxy, ipv6Target]) {
     httpServer.closeAllConnections();
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   }
 });
 
-async function listenOnLoopback(httpServer: NodeHttp.Server) {
-  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
-  return `http://127.0.0.1:${(httpServer.address() as NodeNet.AddressInfo).port}/`;
+async function listenOnLoopback(httpServer: NodeHttp.Server, host = "127.0.0.1") {
+  await new Promise<void>((resolve) => httpServer.listen(0, host, resolve));
+  return `http://${host.includes(":") ? `[${host}]` : host}:${(httpServer.address() as NodeNet.AddressInfo).port}/`;
 }
 
 const clearProxyEnvironment = () => {
@@ -166,6 +169,7 @@ describe("configureOutboundFetch", () => {
       vi.stubEnv("HTTP_PROXY", proxyOrigin);
       configureOutboundFetch();
       expect(yield* textViaBuiltinFetch(targetOrigin)).toBe("direct");
+      expect(yield* textViaBuiltinFetch(ipv6TargetOrigin)).toBe("direct");
     }),
   );
 });
